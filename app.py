@@ -1,693 +1,689 @@
-# utils/ui.py
 from __future__ import annotations
-import math, json
+
+import os
+import sys
+import time
+import folium
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import folium
-from folium.plugins import HeatMap
 import streamlit as st
+from streamlit_folium import st_folium
 
-# 🔒 constants (safe import; dairesel importu önler)
+# Yerel paket yolları
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# Yerel modüller
+from utils.geo import load_geoid_layer, resolve_clicked_gid
+from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
+from utils.patrol import allocate_patrols
+from utils.ui import (
+    SMALL_UI_CSS,
+    render_result_card,
+    build_map_fast,
+    render_kpi_row,
+    render_day_hour_heatmap as fallback_heatmap,
+)
+from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
+from components.last_update import show_last_update_badge
+
+# Opsiyonel modüller
 try:
-    from utils.constants import KEY_COL, CRIME_TYPES
+    from components.report_view import render_reports  # type: ignore
+    HAS_REPORTS = True
+except ModuleNotFoundError:
+    HAS_REPORTS = False
+
+    def render_reports(**kwargs):
+        st.info("Raporlar modülü bulunamadı (components/report_view.py).")
+
+try:
+    from utils.heatmap import render_day_hour_heatmap  # type: ignore
+except ImportError:
+    # Geriye dönük uyumluluk: utils.ui içindeki fonksiyonu kullan
+    render_day_hour_heatmap = fallback_heatmap  # type: ignore
+
+try:
+    from utils.deck import build_map_fast_deck  # type: ignore
+except ImportError:
+    build_map_fast_deck = None
+
+try:
+    from utils.reports import load_events  # type: ignore
 except Exception:
-    KEY_COL = "GEOID"
-    CRIME_TYPES = []
 
-from utils.forecast import pois_pi90
-
-__all__ = [
-    "SMALL_UI_CSS",
-    "render_result_card",
-    "build_map_fast",
-    "render_kpi_row",
-    "render_day_hour_heatmap",
-]
-
-# ────────────────────────────── KÜÇÜK VE TUTARLI TİPOGRAFİ ──────────────────────────────
-SMALL_UI_CSS = """
-<style>
-/* === GENEL: tüm yazılar küçük, satır aralığı dar === */
-html, body, [class*="css"] { font-size: 12px; line-height: 1.28; }
-
-/* === Başlıklar (yalnızca H1 büyük) === */
-h1 { font-size: 1.9rem; line-height: 1.2; margin: .45rem 0 .35rem 0; }
-h2 { font-size: .95rem;  margin: .25rem 0; }
-h3 { font-size: .88rem;  margin: .18rem 0; }
-
-/* === İç boşlukları sıkılaştır === */
-section.main > div.block-container { padding-top: .55rem; padding-bottom: .10rem; }
-[data-testid="stSidebar"] .block-container { padding-top: .25rem; padding-bottom: .25rem; }
-div.element-container { margin-bottom: .22rem; }
-
-/* === Form/label/yardım metinleri === */
-label, .stMarkdown p, .stCaption, .stText, .stRadio, .stSelectbox, .stNumberInput { font-size: .82rem; }
-small, .stCaption, .st-emotion-cache-1wbqy5l { font-size: .74rem; }
-
-/* === Butonlar === */
-.stButton > button,
-.stDownloadButton > button {
-  font-size: .80rem;
-  padding: 4px 10px;
-  border-radius: 8px;
-}
-
-/* === Slider & input içerikleri === */
-[data-testid="stSlider"] { padding-top: .10rem; padding-bottom: .05rem; }
-input, textarea { font-size: .80rem !important; }
-
-/* === Metric kartları (genel) === */
-[data-testid="stMetricValue"] { font-size: .95rem; }
-[data-testid="stMetricLabel"] { font-size: .68rem; color:#666; }
-[data-testid="stMetric"]      { padding: .06rem 0 .02rem 0; }
-
-/* st.metric ellipsis düzeltmesi (label kesilmesin) */
-[data-testid="stMetricLabel"] p{
-  max-width:none !important;
-  overflow:visible !important;
-  text-overflow:clip !important;
-  white-space:nowrap !important;
-  margin:0 !important;
-}
-
-/* Risk Özeti bloğu (bir tık daha küçük) */
-#risk-ozet [data-testid="stMetricValue"] { font-size: .90rem; line-height: 1.0; }
-#risk-ozet [data-testid="stMetricLabel"] { font-size: .64rem; color:#6b7280; }
-#risk-ozet [data-testid="stMetric"]      { padding: .04rem 0 .01rem 0; }
-
-/* === Tablo/DataFrame (başlık + gövde aynı boy) === */
-[data-testid="stDataFrame"] { font-size: .70rem; }
-
-/* hem başlık hem gövdeyi eşitle + satır/padding’i daralt */
-[data-testid="stDataFrame"] thead,
-[data-testid="stDataFrame"] th,
-[data-testid="stDataFrame"] td {
-  font-size: .70rem;
-  line-height: 1.15;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-
-/* tablo araç çubuğu (indir vb.) bir tık küçült */
-[data-testid="stElementToolbar"] button { transform: scale(.90); }
-/* === Expander başlıkları === */
-.st-expanderHeader, [data-baseweb="accordion"] { font-size: .80rem; }
-
-/* === Radio/checkbox aralıklarını daralt === */
-.stRadio > label, .stCheckbox > label { margin-bottom: .08rem; }
-
-/* === Üst menü/footer (isteğe bağlı) === */
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
-
-/* === Özel KPI kartı (tooltip destekli) === */
-.kpi{display:flex;flex-direction:column;gap:2px}
-.kpi-label{font-size:.68rem;color:#6b7280}
-.kpi-value{font-size:.95rem;font-weight:600}
-</style>
-"""
-
-# ───────────────────────────── KPI satırı (tooltip'li, tek tip görünüm) ─────────────────────────────
-def render_kpi_row(items: list[tuple[str, str | float, str]]):
-    """
-    items = [(label, value, tooltip), ...]
-    Tooltip tarayıcı 'title' ile gösterilir.
-    """
-    cols = st.columns(len(items))
-    for col, (label, value, tip) in zip(cols, items):
-        col.markdown(
-            f"""
-            <div class="kpi" title="{tip}">
-              <div class="kpi-label">{label}</div>
-              <div class="kpi-value">{value}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    def load_events(path: str) -> pd.DataFrame:
+        """Basit CSV okuyucu (ts/timestamp kolonu varsa UTC'ye çevirir)."""
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            return pd.DataFrame()
+        lower = {str(c).strip().lower(): c for c in df.columns}
+        ts_col = next(
+            (
+                lower[c]
+                for c in [
+                    "ts",
+                    "timestamp",
+                    "datetime",
+                    "date_time",
+                    "reported_at",
+                    "occurred_at",
+                    "time",
+                    "date",
+                ]
+                if c in lower
+            ),
+            None,
         )
+        if not ts_col:
+            return pd.DataFrame()
+        df["ts"] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+        df = df.dropna(subset=["ts"])  # yalnız geçerli zamanlar
+        if "latitude" not in df.columns and "lat" in df.columns:
+            df = df.rename(columns={"lat": "latitude"})
+        if "longitude" not in df.columns and "lon" in df.columns:
+            df = df.rename(columns={"lon": "longitude"})
+        return df
 
-# --- TR etiketleri ve saha ipuçları ---
-TR_LABEL = {
-    "assault":   "Saldırı",
-    "burglary":  "Konut/İşyeri Hırsızlığı",
-    "theft":     "Hırsızlık",
-    "robbery":   "Soygun",
-    "vandalism": "Vandalizm",
-}
-CUE_MAP = {
-    "assault":   ["bar/eğlence çıkışları", "meydan/park gözetimi"],
-    "robbery":   ["metro/otobüs durağı & ATM", "dar sokak giriş/çıkış"],
-    "theft":     ["otopark ve araç park alanları", "bagaj/bisiklet kilidi"],
-    "burglary":  ["arka sokak & yükleme kapıları", "kapanış sonrası işyerleri"],
-    "vandalism": ["okul/park/altgeçit", "inşaat sahası kontrolü"],
-}
+# ─────────────────────────────────────────────────────────────────────────────
+# Yardımcılar
+# ─────────────────────────────────────────────────────────────────────────────
 
-def actionable_cues(top_types: list[tuple[str, float]], max_items: int = 3) -> list[str]:
-    tips: list[str] = []
-    for crime, _ in top_types[:2]:
-        tips.extend(CUE_MAP.get(crime, [])[:2])
-    seen, out = set(), []
-    for t in tips:
-        if t not in seen:
-            seen.add(t); out.append(t)
-        if len(out) >= max_items:
-            break
+def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
+    """DataFrame'de KEY_COL adını garanti eder ve string'e çevirir."""
+    if df is None or df.empty:
+        return df
+    if want in df.columns:
+        out = df.copy()
+        out[want] = out[want].astype(str)
+        return out
+    alts = {want.upper(), want.lower(), "GEOID", "geoid", "GeoID"}
+    hit = next((c for c in df.columns if c in alts), None)
+    out = df.copy()
+    if hit and hit != want:
+        out = out.rename(columns={hit: want})
+    if want in out.columns:
+        out[want] = out[want].astype(str)
     return out
 
-def confidence_label(q10: float, q90: float) -> str:
-    width = q90 - q10
-    if width < 0.18:
-        return "yüksek"
-    if width < 0.30:
-        return "orta"
-    return "düşük"
 
-def risk_window_text(start_iso: str, horizon_h: int) -> str:
-    start = datetime.fromisoformat(start_iso)
-    hours = np.arange(horizon_h)
-    diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
-    if diurnal.size == 0:
-        t2 = start
-    else:
-        thr = np.quantile(diurnal, 0.75)
-        hot = np.where(diurnal >= thr)[0]
-        if len(hot) == 0:
-            t2 = start + timedelta(hours=horizon_h)
-            return f"{start:%H:%M}–{t2:%H:%M}"
-        splits = np.split(hot, np.where(np.diff(hot) != 1)[0] + 1)
-        seg = max(splits, key=len)
-        t1 = start + timedelta(hours=int(seg[0]))
-        t2 = start + timedelta(hours=int(seg[-1]) + 1)
-        t_peak = start + timedelta(hours=int(seg[len(seg)//2]))
-        return f"{t1:%H:%M}–{t2:%H:%M} (tepe ≈ {t_peak:%H:%M})"
-    return f"{start:%H:%M}–{t2:%H:%M}"
+def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Centroid kolon adlarını standardize eder (centroid_lat/lon)."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    rn: dict[str, str] = {}
+    if "centroid_lat" not in out.columns:
+        if "Centroid_Lat" in out.columns:
+            rn["Centroid_Lat"] = "centroid_lat"
+        if "CENTROID_LAT" in out.columns:
+            rn["CENTROID_LAT"] = "centroid_lat"
+        if "lat" in out.columns and "centroid_lon" in out.columns:
+            rn["lat"] = "centroid_lat"
+    if "centroid_lon" not in out.columns:
+        if "Centroid_Lon" in out.columns:
+            rn["Centroid_Lon"] = "centroid_lon"
+        if "CENTROID_LON" in out.columns:
+            rn["CENTROID_LON"] = "centroid_lon"
+        if "lon" in out.columns and "centroid_lat" in out.columns:
+            rn["lon"] = "centroid_lon"
+    return out.rename(columns=rn) if rn else out
 
-# ───────────────────────────── SONUÇ KARTI ─────────────────────────────
-def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
-    if df_agg is None or df_agg.empty or geoid is None:
-        st.info("Bölge seçilmedi.")
-        return
 
-    row = df_agg.loc[df_agg[KEY_COL] == geoid]
-    if row.empty:
-        st.info("Seçilen bölge için veri yok.")
-        return
-    row = row.iloc[0].to_dict()
+def now_sf_iso() -> str:
+    return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).isoformat(timespec="seconds")
 
-    # Near-repeat (varsa)
-    nr = float(row.get("nr_boost", 0.0))
 
-    # Tür bazında λ ve P(≥1)
-    type_lams = {t: float(row.get(t, 0.0)) for t in CRIME_TYPES}
-    type_probs = {TR_LABEL.get(t, t): 1.0 - math.exp(-lam) for t, lam in type_lams.items()}
-    probs_sorted = sorted(type_probs.items(), key=lambda x: x[1], reverse=True)
-
-    # İlk iki tür için 90% PI metni
-    pi90_lines: list[str] = []
-    for name_tr, _p in probs_sorted[:2]:
-        t_eng = next((k for k, v in TR_LABEL.items() if v == name_tr), None)
-        if t_eng is None:
-            continue
-        lam = type_lams.get(t_eng, 0.0)
-        lo, hi = pois_pi90(lam)
-        pi90_lines.append(f"{name_tr}: {lam:.1f} ({lo}–{hi})")
-
-    # Güven ve zaman penceresi
-    q10 = float(row.get("q10", 0.0))
-    q90 = float(row.get("q90", 0.0))
-    conf_txt = confidence_label(q10, q90)
-    win_text = risk_window_text(start_iso, horizon_h)
-
-    # UI
-    st.markdown("### 🧭 Sonuç Kartı")
-    c1, c2, c3 = st.columns([1.0, 1.2, 1.2])
-
-    with c1:
-        st.metric("Bölge (GEOID)", geoid)
-        st.metric("Öncelik", str(row.get("tier", "—")))
-        st.metric("Ufuk", f"{horizon_h} saat")
-
-    with c2:
-        st.markdown("**En olası suç türleri (P≥1)**")
-        for name_tr, p in probs_sorted[:5]:
-            st.write(f"- {name_tr}: {p:.2f}")
-
-    with c3:
-        st.markdown("**Beklenen sayılar (90% PI)**")
-        for line in pi90_lines:
-            st.write(f"- {line}")
-
-    st.markdown("---")
-
-    # Top-2 öneri metni
-    top2 = [name for name, _ in probs_sorted[:2]]
-    st.markdown(f"**Top-2 öneri:** {', '.join(top2) if top2 else '—'}")
-
-    # Kolluğa pratik öneriler
+def load_events_safe(path: str = "data/events.csv") -> pd.DataFrame:
     try:
-        top_types_eng = []
-        for name_tr, _ in probs_sorted[:2]:
-            t_eng = next((k for k, v in TR_LABEL.items() if v == name_tr), None)
-            if t_eng:
-                top_types_eng.append((t_eng, type_lams.get(t_eng, 0.0)))
-        cues = actionable_cues(top_types_eng, max_items=3)
-    except Exception:
-        cues = []
-
-    # Near-repeat satırı (tek yerde)
-    if nr > 0:
-        st.markdown(
-            f"- **Near-repeat etkisi:** {nr:.2f} (0=etki yok, 1=yüksek). "
-            "Taze olay çevresinde kısa ufukta risk artar."
-        )
-
-    st.markdown(f"- **Risk penceresi:** {win_text}")
-    st.markdown(f"- **Güven:** {conf_txt} (q10={q10:.2f}, q90={q90:.2f})")
-
-    if cues:
-        st.markdown("**Kolluğa öneriler:**")
-        for c in cues:
-            st.write(f"- {c}")
-
-def color_for_tier(tier: str) -> str:
-    return {"Yüksek": "#d62728", "Orta": "#ff7f0e", "Hafif": "#1f77b4"}.get(tier, "#1f77b4")
-
-
-def build_map_fast(
-    df_agg: pd.DataFrame,
-    geo_features: list,
-    geo_df: pd.DataFrame,
-    show_popups: bool = False,
-    patrol: Dict | None = None,
-    *,
-    show_poi: bool = False,
-    show_transit: bool = False,
-    # mevcut parametreler
-    show_hotspot: bool = False,                      # (artık varsayılan görünürlük için kullanmıyoruz)
-    show_temp_hotspot: bool = False,                 # (↑)
-    temp_hotspot_points: pd.DataFrame | None = None, # [latitude, longitude, weight]
-    selected_type: str | None = None,
-    perm_hotspot_mode: str = "markers",              # "markers" | "heat"
-    show_anomaly: bool = False,
-    base_metric_for_anom: str | None = None,
-    temp_scores_col: str = "hotspot_score",
-    anom_thr: float = 0.25,
-    # ↓ yeni parametreler (harita üzerindeki katman menüsü için)
-    add_layer_control: bool = True,
-    risk_layer_show: bool = True,
-    perm_hotspot_show: bool = True,
-    temp_hotspot_show: bool = True,
-    risk_layer_name: str = "Tahmin katmanı (risk)",
-    perm_hotspot_layer_name: str = "Sıcak nokta (kalıcı)",
-    temp_hotspot_layer_name: str = "Geçici sıcak nokta (son olaylar)",
-) -> "folium.Map":
-    m = folium.Map(location=[37.7749, -122.4194], zoom_start=12, tiles="cartodbpositron")
-
-    if df_agg is None or df_agg.empty:
-        return m
-    df_agg = df_agg.copy()
-    df_agg[KEY_COL] = df_agg[KEY_COL].astype(str)
-
-    # --- Hücre stilleri & popup verisini hazırlamak için kolay erişim sözlükleri
-    color_map = {str(r[KEY_COL]): color_for_tier(str(r.get("tier", ""))) for _, r in df_agg.iterrows()}
-    data_map  = df_agg.set_index(df_agg[KEY_COL].astype(str)).to_dict(orient="index")
-
-    # --- GeoJSON FeatureCollection'ı oluştur / properties.id alanını garanti et
-    features = []
-    for feat in geo_features:
-        f = json.loads(json.dumps(feat))  # derin kopya
-        props = f.get("properties", {})
-        # id yoksa geoid/GEOID'den üret
-        if "id" not in props:
-            if "geoid" in props:
-                props["id"] = props["geoid"]
-            elif "GEOID" in props:
-                props["id"] = props["GEOID"]
-            else:
-                props["id"] = None
-        gid = str(props.get("id")) if props.get("id") is not None else None
-        row = data_map.get(gid)
-        if row:
-            expected = float(row.get("expected", 0.0))
-            tier = str(row.get("tier", "—"))
-            q10 = float(row.get("q10", 0.0))
-            q90 = float(row.get("q90", 0.0))
-            # Suç türleri listesi boşsa da çalışsın
-            types = {t: float(row.get(t, 0.0)) for t in (CRIME_TYPES or [])}
-            top3 = sorted(types.items(), key=lambda x: x[1], reverse=True)[:3]
-            top_html = "".join([f"<li>{t}: {v:.2f}</li>" for t, v in top3])
-
-            props["popup_html"] = (
-                f"<b>{gid}</b><br/>E[olay] (ufuk): {expected:.2f} • Öncelik: <b>{tier}</b><br/>"
-                f"<b>En olası 3 tip</b><ul style='margin-left:12px'>{top_html}</ul>"
-                f"<i>Belirsizlik (saatlik ort.): q10={q10:.2f}, q90={q90:.2f}</i>"
-            )
-            props["expected"] = round(expected, 2)
-            props["tier"] = tier
-
-        f["properties"] = props
-        features.append(f)
-
-    fc = {"type": "FeatureCollection", "features": features}
-
-    # --- Style function: sadece stil dict'i döndürür ---
-    def style_fn(feat):
-        gid_val = feat.get("properties", {}).get("id")
-        gid = str(gid_val) if gid_val is not None else None
-        return {
-            "fillColor": color_map.get(gid, "#9ecae1"),
-            "color": "#666666",
-            "weight": 0.3,
-            "fillOpacity": 0.55,
-        }
-
-    # --- GeoJson: güvenli tooltip/popup + style_function kwargs ---
-    gj_kwargs = {"style_function": style_fn}
-    if show_popups:
-        try:
-            tt = folium.features.GeoJsonTooltip(
-                fields=["id", "tier", "expected"],
-                aliases=["GEOID", "Öncelik", "E[olay]"],
-                localize=True, sticky=False
-            )
-            gj_kwargs["tooltip"] = tt
-        except Exception:
-            pass
-        try:
-            pp = folium.features.GeoJsonPopup(
-                fields=["popup_html"], labels=False, parse_html=False, max_width=280
-            )
-            gj_kwargs["popup"] = pp
-        except Exception:
-            pass
-
-    fg_cells = folium.FeatureGroup(name=risk_layer_name, show=bool(risk_layer_show))
-    try:
-        folium.GeoJson(fc, style_function=style_fn, tooltip=tt, popup=pp).add_to(fg_cells)
-    except Exception:
-        folium.GeoJson(fc, style_function=style_fn).add_to(fg_cells)
-    fg_cells.add_to(m)
-
-    # ---------- POI / Transit overlay'leri ----------
-    def _read_first_existing_csv(paths: list[str]) -> pd.DataFrame | None:
-        for p in paths:
-            try:
-                return pd.read_csv(p)
-            except Exception:
-                continue
-        return None
-
-    if show_poi:
-        try:
-            poi_df = _read_first_existing_csv(
-                ["data/sf_pois_cleaned_with_geoid.csv", "data/poi.csv"]
-            )
-            if poi_df is not None and not poi_df.empty:
-                lat_col = (
-                    "latitude"
-                    if "latitude" in poi_df.columns
-                    else ("lat" if "lat" in poi_df.columns else None)
-                )
-                lon_col = (
-                    "longitude"
-                    if "longitude" in poi_df.columns
-                    else ("lon" if "lon" in poi_df.columns else None)
-                )
-                if lat_col and lon_col:
-                    fg_poi = folium.FeatureGroup(name="POI", show=True)
-                    for _, r in poi_df.head(2000).iterrows():  # performans sınırı
-                        folium.CircleMarker(
-                            location=[float(r[lat_col]), float(r[lon_col])],
-                            radius=2,
-                            color="#3b82f6",
-                            fill=True,
-                            fill_color="#3b82f6",
-                            fill_opacity=0.6,
-                            opacity=0.7,
-                        ).add_to(fg_poi)
-                    fg_poi.add_to(m)
-        except Exception:
-            pass
-
-    if show_transit:
-        try:
-            bus_df = _read_first_existing_csv(
-                [
-                    "data/sf_bus_stops_with_geoid.csv",
-                    "data/sf_bus_stops.csv",
-                    "data/transit_bus_stops.csv",
-                ]
-            )
-            train_df = _read_first_existing_csv(
-                [
-                    "data/sf_train_stops_with_geoid.csv",
-                    "data/sf_train_stops.csv",
-                    "data/transit_train_stops.csv",
-                ]
-            )
-            fg_tr = folium.FeatureGroup(name="Transit", show=True)
-
-            if bus_df is not None and not bus_df.empty:
-                blat = (
-                    "latitude"
-                    if "latitude" in bus_df.columns
-                    else ("lat" if "lat" in bus_df.columns else None)
-                )
-                blon = (
-                    "longitude"
-                    if "longitude" in bus_df.columns
-                    else ("lon" if "lon" in bus_df.columns else None)
-                )
-                if blat and blon:
-                    for _, r in bus_df.head(2000).iterrows():
-                        folium.CircleMarker(
-                            location=[float(r[blat]), float(r[blon])],
-                            radius=1.6,
-                            color="#10b981",
-                            fill=True,
-                            fill_color="#10b981",
-                            fill_opacity=0.55,
-                            opacity=0.6,
-                        ).add_to(fg_tr)
-
-            if train_df is not None and not train_df.empty:
-                tlat = (
-                    "latitude"
-                    if "latitude" in train_df.columns
-                    else ("lat" if "lat" in train_df.columns else None)
-                )
-                tlon = (
-                    "longitude"
-                    if "longitude" in train_df.columns
-                    else ("lon" if "lon" in train_df.columns else None)
-                )
-                if tlat and tlon:
-                    for _, r in train_df.head(1500).iterrows():
-                        folium.CircleMarker(
-                            location=[float(r[tlat]), float(r[tlon])],
-                            radius=2.2,
-                            color="#ef4444",
-                            fill=True,
-                            fill_color="#ef4444",
-                            fill_opacity=0.6,
-                            opacity=0.75,
-                        ).add_to(fg_tr)
-
-            if len(getattr(fg_tr, "_children", {})) > 0:
-                fg_tr.add_to(m)
-        except Exception:
-            pass
-
-    # === Geçici hotspot katmanı (son T saat ısı haritası) ===
-    if show_temp_hotspot and temp_hotspot_points is not None and not temp_hotspot_points.empty:
-        try:
-            cols = {c.lower(): c for c in temp_hotspot_points.columns}
-            lat = cols.get("latitude") or cols.get("lat")
-            lon = cols.get("longitude") or cols.get("lon")
-            w   = cols.get("weight")
-            if lat and lon:
-                pts = temp_hotspot_points[[lat, lon] + ([w] if w else [])].values.tolist()
-                fg_temp = folium.FeatureGroup(name=temp_hotspot_layer_name, show=bool(temp_hotspot_show))
-                HeatMap(pts, radius=16, blur=24, max_zoom=16).add_to(fg_temp)
-                fg_temp.add_to(m)
-        except Exception:
-            pass
-            
-    # === Kalıcı hotspot katmanı (kategoriye duyarlı) ===
-    if show_hotspot:
-        try:
-            # 1) Hangi metrik? (seçili kategori varsa o; yoksa expected)
-            metric_col = None
-            if selected_type and selected_type in df_agg.columns:
-                metric_col = selected_type
-            elif "expected" in df_agg.columns:
-                metric_col = "expected"
-            if not metric_col:
-                raise ValueError("Kalıcı hotspot için uygun metrik bulunamadı.")
-    
-            if perm_hotspot_mode == "heat":
-                # 2a) HEATMAP modu (#4. fotodaki gibi)
-                centers = df_agg.merge(
-                    geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]],
-                    on=KEY_COL, how="left"
-                )
-                if not centers.empty:
-                    w = centers[metric_col].clip(lower=0).to_numpy()
-                    pts = centers[["centroid_lat", "centroid_lon"]].copy()
-                    pts["weight"] = w
-                    layer_name = ("Kalıcı Hotspot (ısı)" if not selected_type or selected_type in ("all", None)
-                                  else f"Kalıcı Hotspot (ısı) · {selected_type}")
-                    fg_perm_heat = folium.FeatureGroup(name=layer_name, show=bool(perm_hotspot_show))
-                    HeatMap(
-                        pts[["centroid_lat", "centroid_lon", "weight"]].values.tolist(),
-                        radius=24, blur=28, max_zoom=16
-                    ).add_to(fg_perm_heat)
-                    fg_perm_heat.add_to(m)
-            else:
-                # 2b) MARKER modu (mevcut davranış: üst %10)
-                thr = float(np.quantile(df_agg[metric_col].to_numpy(), 0.90))
-                strong = df_agg[df_agg[metric_col] >= thr].merge(
-                    geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]],
-                    on=KEY_COL, how="left",
-                )
-                if not strong.empty:
-                    layer_name = (
-                        "Kalıcı Hotspot"
-                        if not selected_type or selected_type in (None, "all")
-                        else f"Kalıcı Hotspot · {selected_type}"
-                    )
-                    fg_perm = folium.FeatureGroup(name=layer_name, show=bool(perm_hotspot_show))
-                    for _, r in strong.iterrows():
-                        folium.CircleMarker(
-                            [float(r["centroid_lat"]), float(r["centroid_lon"])],
-                            radius=4, color="#8b0000",
-                            fill=True, fill_color="#8b0000",
-                            fill_opacity=0.5, opacity=0.8
-                        ).add_to(fg_perm)
-                    fg_perm.add_to(m)
-        except Exception:
-            pass
-
-    # === Anomali: Geçici – Kalıcı farkı ===
-    if show_anomaly and temp_scores_col in df_agg.columns:
-        try:
-            base_col = base_metric_for_anom or ("expected" if "expected" in df_agg.columns else None)
-            if base_col:
-                # min–max normalize (taban ve geçici skoru aynı ölçeğe çek)
-                b = df_agg[base_col].to_numpy()
-                t = df_agg[temp_scores_col].to_numpy()
-                b_norm = (b - b.min()) / (b.max() - b.min() + 1e-12)
-                t_norm = (t - t.min()) / (t.max() - t.min() + 1e-12)
-                delta = t_norm - b_norm
-    
-                anom = df_agg.assign(_delta=delta)
-                anom = anom[anom["_delta"] >= float(anom_thr)].merge(
-                    geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]],
-                    on=KEY_COL, how="left"
-                )
-                if not anom.empty:
-                    fg_anom = folium.FeatureGroup(name="Anomali (geçici–kalıcı)", show=True)
-                    for _, r in anom.iterrows():
-                        folium.CircleMarker(
-                            [float(r["centroid_lat"]), float(r["centroid_lon"])],
-                            radius=6, color="#000",
-                            fill=True, fill_color="#ffd60a", fill_opacity=0.85
-                        ).add_to(fg_anom)
-                    fg_anom.add_to(m)
-        except Exception:
-            pass
-
-    # Katman kontrolü (en sonda)
-    try:
-        folium.LayerControl(collapsed=True).add_to(m)
+        df = load_events(path)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return df
     except Exception:
         pass
+    return pd.DataFrame()
 
-    # Üst %1 uyarı
-    try:
-        thr99 = float(np.quantile(df_agg["expected"].to_numpy(), 0.99))
-        urgent = df_agg[df_agg["expected"] >= thr99].merge(
-            geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL
-        )
-        for _, r in urgent.iterrows():
-            folium.CircleMarker(
-                location=[float(r["centroid_lat"]), float(r["centroid_lon"])],
-                radius=5,
-                color="#000",
-                fill=True,
-                fill_color="#ff0000",
-            ).add_to(m)
-    except Exception:
-        pass
 
-    # Devriye rotaları (varsa)
-    if patrol and patrol.get("zones"):
-        for z in patrol["zones"]:
-            try:
-                folium.PolyLine(z["route"], tooltip=f"{z['id']} rota").add_to(m)
-                folium.Marker(
-                    [z["centroid"]["lat"], z["centroid"]["lon"]],
-                    icon=folium.DivIcon(
-                        html="<div style='background:#111;color:#fff;padding:2px 6px;border-radius:6px'>"
-                        f" {z['id']} </div>"
-                    ),
-                ).add_to(m)
-            except Exception:
-                continue
+def recent_events(df: pd.DataFrame, lookback_h: int, category: Optional[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["ts", "latitude", "longitude", KEY_COL])
+    out = df.copy()
+    ts_col = "ts" if "ts" in out.columns else None
+    if ts_col:
+        out["ts"] = pd.to_datetime(out[ts_col], utc=True, errors="coerce")
+        out = out[out["ts"] >= (pd.Timestamp.utcnow() - pd.Timedelta(hours=lookback_h))]
+    if category and category != "(Tüm suçlar)" and "type" in out.columns:
+        out = out[out["type"] == category]
+    if "latitude" not in out.columns and "lat" in out.columns:
+        out = out.rename(columns={"lat": "latitude"})
+    if "longitude" not in out.columns and "lon" in out.columns:
+        out = out.rename(columns={"lon": "longitude"})
+    out = out.dropna(subset=["latitude", "longitude"]).copy()
+    out["weight"] = 1.0
+    return out
 
-    return m
 
-# ───────────── Gün × Saat Isı Matrisi ─────────────
-def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, horizon_h: int | None = None):
-    """
-    - agg 'dow' ve 'hour' içeriyorsa direkt pivot.
-    - Değilse ve start_iso & horizon_h verilmişse, toplam expected’ı diurnal profile göre saatlere dağıtır.
-    - Aksi halde 24 saatlik varsayılan bir dağıtım üretir.
-    """
+def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: int = 80) -> pd.DataFrame:
     if agg is None or agg.empty:
-        st.caption("Isı matrisi için veri yok.")
-        return
-
-    # 1) Hazır kolonlarla pivot
-    if {"dow", "hour"}.issubset(agg.columns):
-        mat = (
-            agg.pivot_table(index="dow", columns="hour", values="expected", aggfunc="sum")
-               .reindex(index=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], fill_value=0.0)
-               .reindex(columns=list(range(24)), fill_value=0.0)
+        return pd.DataFrame(columns=["latitude", "longitude", "weight"])
+    try:
+        agg2 = ensure_keycol(agg, KEY_COL)
+        geo2 = ensure_keycol(ensure_centroid_cols(geo_df), KEY_COL)
+        tmp = (
+            agg2.nlargest(topn, "expected")
+            .merge(geo2[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL, how="left")
+            .dropna(subset=["centroid_lat", "centroid_lon"])
         )
-        st.dataframe(mat.round(2), use_container_width=True)
-        return
+        pts = tmp.rename(columns={"centroid_lat": "latitude", "centroid_lon": "longitude"})[["latitude", "longitude"]]
+        pts["weight"] = tmp["expected"].clip(lower=0).astype(float)
+        return pts
+    except Exception:
+        return pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
-    # 2) start/horizon ile sentez
-    if start_iso is not None and horizon_h is not None:
-        start = pd.to_datetime(start_iso)
-        hours = np.arange(int(horizon_h))
-        diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
-        w = diurnal / (diurnal.sum() + 1e-12)
-        total_expected = float(agg["expected"].sum())
 
-        dow_labels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-        mat = pd.DataFrame(0.0, index=dow_labels, columns=[f"{h:02d}" for h in range(24)])
-        for h, weight in enumerate(w):
-            dt = start + timedelta(hours=int(h))
-            mat.loc[dow_labels[dt.dayofweek], f"{dt.hour:02d}"] += total_expected * float(weight)
+def run_prediction(
+    start_h: int,
+    end_h: int,
+    filters: dict,
+    geo_df: pd.DataFrame,
+    base_int: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], str, int]:
+    start_dt = (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET + start_h)).replace(
+        minute=0, second=0, microsecond=0
+    )
+    horizon_h = max(1, end_h - start_h)
+    start_iso = start_dt.isoformat()
 
-        st.dataframe(mat.round(2), use_container_width=True)
-        return
+    events_df = load_events_safe()
 
-    # 3) Fallback: 24 saat varsayılan
-    start = pd.Timestamp.utcnow()
-    hours = np.arange(24)
-    diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
-    w = diurnal / (diurnal.sum() + 1e-12)
-    total_expected = float(agg["expected"].sum())
+    agg = aggregate_fast(
+        start_iso,
+        horizon_h,
+        geo_df,
+        base_int,
+        events=events_df,
+        near_repeat_alpha=0.35,
+        nr_lookback_h=24,
+        nr_radius_m=400,
+        nr_decay_h=12.0,
+        filters=filters,
+    )
 
-    dow_labels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-    mat = pd.DataFrame(0.0, index=dow_labels, columns=[f"{h:02d}" for h in range(24)])
-    for h, weight in enumerate(w):
-        dt = start + timedelta(hours=int(h))
-        mat.loc[dow_labels[dt.dayofweek], f"{dt.hour:02d}"] += total_expected * float(weight)
+    # Sağlam kademe sınıflayıcı: expected → ['Çok Düşük','Düşük','Orta','Yüksek','Çok Yüksek']
+    def assign_tier_safe(agg_in: pd.DataFrame) -> pd.DataFrame:
+        if agg_in is None or agg_in.empty or "expected" not in agg_in.columns:
+            return agg_in
+        out = agg_in.copy()
+        x = (
+            pd.to_numeric(out["expected"], errors="coerce")
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+            .clip(lower=0.0)
+        )
+        out["expected"] = x
+        labels5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
 
-    st.dataframe(mat.round(2), use_container_width=True)
+        # Veri çeşitliliği azsa tek seviyeye düş
+        if x.nunique(dropna=True) < 5 or x.count() < 5:
+            out["tier"] = "Çok Düşük"
+            return out
+
+        # qcut ile dene
+        try:
+            out["tier"] = pd.qcut(x, q=5, labels=labels5, duplicates="drop").astype(str)
+            if out["tier"].isna().all():
+                raise ValueError("qcut collapsed")
+            return out
+        except Exception:
+            pass
+
+        # Elle kantil: epsilon ile kenarları ayır
+        try:
+            q = np.quantile(x.to_numpy(), [0.20, 0.40, 0.60, 0.80]).astype(float)
+            eps = max(1e-9, 1e-6 * float(np.nanmax(x) - np.nanmin(x)))
+            for i in range(1, len(q)):
+                if q[i] <= q[i - 1]:
+                    q[i] = q[i - 1] + eps
+            bins = np.concatenate(([-np.inf], q, [np.inf]))
+            out["tier"] = pd.cut(x, bins=bins, labels=labels5, include_lowest=True).astype(str)
+            return out
+        except Exception:
+            med = float(np.nanmedian(x))
+            p75 = float(np.nanquantile(x, 0.75))
+            p90 = float(np.nanquantile(x, 0.90))
+
+            def fallback(v: float) -> str:
+                if v <= med * 0.5:
+                    return "Çok Düşük"
+                if v <= med:
+                    return "Düşük"
+                if v <= p75:
+                    return "Orta"
+                if v <= p90:
+                    return "Yüksek"
+                return "Çok Yüksek"
+
+            out["tier"] = [fallback(float(v)) for v in x]
+            return out
+
+    # Eski pd.cut temelli kademe bloğu kaldırıldı; güvenli sınıflayıcı uygulanıyor
+    agg = assign_tier_safe(agg)
+    agg = ensure_keycol(agg, KEY_COL)
+
+    # Uzun ufuk referansı (30 gün geriden bugüne)
+    try:
+        long_start_iso = (
+            datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET - 30 * 24)
+        ).replace(minute=0, second=0, microsecond=0).isoformat()
+        agg_long = aggregate_fast(
+            long_start_iso,
+            30 * 24,
+            geo_df,
+            base_int,
+            events=events_df,
+            near_repeat_alpha=0.0,
+            filters=None,
+        )
+        agg_long = ensure_keycol(agg_long, KEY_COL)
+    except Exception:
+        agg_long = None
+
+    return agg, agg_long, start_iso, horizon_h
+
+
+def top_risky_table(
+    df_agg: pd.DataFrame, n: int, show_ci: bool, start_iso: Optional[str], horizon_h: int
+) -> pd.DataFrame:
+    def poisson_ci(lam: float, z: float = 1.96) -> tuple[float, float]:
+        s = float(np.sqrt(max(lam, 1e-9)))
+        return max(0.0, lam - z * s), lam + z * s
+
+    cols = [KEY_COL, "expected"] + (["nr_boost"] if "nr_boost" in df_agg.columns else [])
+    df = ensure_keycol(df_agg, KEY_COL)[cols].sort_values("expected", ascending=False).head(n).reset_index(drop=True)
+
+    lam = df["expected"].to_numpy()
+    df["P(≥1)%"] = [round(prob_ge_k(l, 1) * 100, 1) for l in lam]
+
+    # Saat aralığı (SF)
+    try:
+        if start_iso:
+            _start = pd.to_datetime(start_iso)
+            _end = _start + pd.to_timedelta(horizon_h, unit="h")
+            df["Saat"] = f"{_start.strftime('%H:%M')}–{_end.strftime('%H:%M')} (SF)"
+        else:
+            df["Saat"] = "-"
+    except Exception:
+        df["Saat"] = "-"
+
+    if show_ci:
+        ci = [poisson_ci(float(l)) for l in lam]
+        df["95% GA"] = [f"[{lo:.2f}, {hi:.2f}]" for lo, hi in ci]
+
+    if "nr_boost" in df.columns:
+        df["NR"] = df["nr_boost"].round(2)
+
+    df["E[olay] (λ)"] = df["expected"].round(2)
+    drop = ["expected"] + (["nr_boost"] if "nr_boost" in df.columns else [])
+    return df.drop(columns=drop)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UI: Sayfa & Başlık
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
+st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
+st.title("SUTAM: Suç Tahmin Modeli")
+
+# Veri sonu
+try:
+    _events_df = load_events_safe()
+    st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
+    st.session_state["events"] = st.session_state["events_df"]
+    data_upto_val = (
+        pd.to_datetime(_events_df["ts"]).max().date().isoformat()
+        if isinstance(_events_df, pd.DataFrame)
+        and not _events_df.empty
+        and "ts" in _events_df.columns
+        else None
+    )
+except Exception:
+    st.session_state["events_df"] = None
+    st.session_state["events"] = None
+    data_upto_val = None
+
+show_last_update_badge(
+    data_upto=data_upto_val,
+    model_version=MODEL_VERSION,
+    last_train=MODEL_LAST_TRAIN,
+)
+
+# Geo katmanı
+GEO_DF, GEO_FEATURES = load_geoid_layer("data/sf_cells.geojson")
+GEO_DF = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
+if GEO_DF.empty:
+    st.error("GEOJSON yüklenemedi veya satır yok.")
+    st.stop()
+
+# Model tabanı
+BASE_INT = precompute_base_intensity(GEO_DF)
+
+# Sidebar
+st.sidebar.markdown("### Görünüm")
+sekme_options = ["Operasyon"] + (["Raporlar"] if HAS_REPORTS else [])
+sekme = st.sidebar.radio("", options=sekme_options, index=0, horizontal=True)
+
+st.sidebar.divider()
+st.sidebar.header("Devriye Parametreleri")
+engine = st.sidebar.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
+
+st.sidebar.subheader("Harita katmanları")
+show_poi = st.sidebar.checkbox("POI overlay", value=False)
+show_transit = st.sidebar.checkbox("Toplu taşıma overlay", value=False)
+show_popups = st.sidebar.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
+
+scope = st.sidebar.radio("Grafik kapsamı", ["Tüm şehir", "Seçili hücre"], index=0)
+
+# Hotspot ayarları
+show_hotspot = True
+show_temp_hotspot = True
+hotspot_cat = st.sidebar.selectbox(
+    "Hotspot kategorisi",
+    ["(Tüm suçlar)"] + CATEGORIES,
+    index=0,
+    help="Kalıcı/Geçici hotspot katmanları bu kategoriye göre gösterilir.",
+)
+use_hot_hours = st.sidebar.checkbox("Geçici hotspot için gün içi saat filtresi", value=False)
+hot_hours_rng = st.sidebar.slider("Saat aralığı (hotspot)", 0, 24, (0, 24), disabled=not use_hot_hours)
+
+# Zaman ufku
+ufuk = st.sidebar.radio("Zaman Aralığı (şimdiden)", ["24s", "48s", "7g"], index=0, horizontal=True)
+max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7 * 24, 24)
+start_h, end_h = st.sidebar.slider("Saat filtresi", min_value=0, max_value=max_h, value=(0, max_h), step=step)
+
+# Kategori filtresi (tahmin motoru)
+sel_categories = st.sidebar.multiselect("Kategori", ["(Hepsi)"] + CATEGORIES, default=[])
+filters = {"cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories else (sel_categories or None)}
+
+show_advanced = st.sidebar.checkbox("Gelişmiş metrikleri göster (analist)", value=False)
+
+st.sidebar.divider()
+st.sidebar.subheader("Devriye Parametreleri")
+K_planned = st.sidebar.number_input("Planlanan devriye sayısı (K)", 1, 50, 6, 1)
+duty_minutes = st.sidebar.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
+cell_minutes = st.sidebar.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
+
+colA, colB = st.sidebar.columns(2)
+btn_predict = colA.button("Tahmin et")
+btn_patrol = colB.button("Devriye öner")
+
+# State
+st.session_state.setdefault("agg", None)
+st.session_state.setdefault("agg_long", None)
+st.session_state.setdefault("patrol", None)
+st.session_state.setdefault("start_iso", None)
+st.session_state.setdefault("horizon_h", None)
+st.session_state.setdefault("explain", {})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEKME: Operasyon
+# ─────────────────────────────────────────────────────────────────────────────
+if sekme == "Operasyon":
+    col1, col2 = st.columns([2.4, 1.0])
+
+    with col1:
+        st.caption(f"Son güncelleme (SF): {now_sf_iso()}")
+
+        if btn_predict or st.session_state["agg"] is None:
+            agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
+            st.session_state.update(
+                {
+                    "agg": agg,
+                    "agg_long": agg_long,
+                    "patrol": None,
+                    "start_iso": start_iso,
+                    "horizon_h": horizon_h,
+                    "events": st.session_state.get("events_df"),
+                }
+            )
+
+        agg = st.session_state["agg"]
+        events_all = st.session_state.get("events")
+        lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
+        ev_recent_df = recent_events(
+            events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
+            lookback_h,
+            hotspot_cat,
+        )
+
+        # Grafik kapsamı: seçili hücre
+        if scope == "Seçili hücre" and st.session_state.get("explain", {}).get("geoid") and KEY_COL in ev_recent_df.columns:
+            gid = str(st.session_state["explain"]["geoid"])  # str karşılaştırma
+            ev_recent_df = ev_recent_df[ev_recent_df[KEY_COL].astype(str) == gid]
+
+        # Geçici hotspot noktaları
+        temp_points = (
+            ev_recent_df[["latitude", "longitude", "weight"]]
+            if not ev_recent_df.empty
+            else pd.DataFrame(columns=["latitude", "longitude", "weight"])
+        )
+        if use_hot_hours and not temp_points.empty and "ts" in ev_recent_df.columns:
+            h1, h2 = hot_hours_rng[0], (hot_hours_rng[1] - 1) % 24
+            temp_points = ev_recent_df[ev_recent_df["ts"].dt.hour.between(h1, h2)][["latitude", "longitude", "weight"]]
+
+        if temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
+            temp_points = make_temp_hotspot_from_agg(agg, GEO_DF, topn=80)
+
+        st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
+
+        if isinstance(agg, pd.DataFrame):
+            if "neighborhood" not in agg.columns and "neighborhood" in GEO_DF.columns:
+                try:
+                    from utils.geo import join_neighborhood  # 2. adımda eklediğimiz yardımcı
+                    agg = join_neighborhood(agg, GEO_DF)
+                except Exception:
+                    # utils.geo.join_neighborhood yoksa sessizce geç
+                    pass
+
+        # — HARİTA — (gömülü katman simgesi = sağ üst ikon)
+        if agg is not None:
+            if engine == "Folium":
+                try:
+                    # build_map_fast varsa LayerControl'u biz ekleyeceğiz
+                    m = build_map_fast(
+                        df_agg=agg,
+                        geo_features=GEO_FEATURES,
+                        geo_df=GEO_DF,
+                        show_popups=show_popups,
+                        patrol=st.session_state.get("patrol"),
+                        # hotspot katmanlarını üret
+                        show_hotspot=True,
+                        perm_hotspot_mode="heat",
+                        show_temp_hotspot=True,
+                        temp_hotspot_points=temp_points,
+                        # kendi kontrolümüzü ekleyeceğiz
+                        add_layer_control=False,
+                        risk_layer_show=True,
+                        perm_hotspot_show=True,
+                        temp_hotspot_show=True,
+                        risk_layer_name="Tahmin (risk)",
+                        perm_hotspot_layer_name="Hotspot (kalıcı)",
+                        temp_hotspot_layer_name="Hotspot (geçici)",
+                    )
+                except TypeError:
+                    # Eski imza: add_layer_control yok
+                    m = build_map_fast(
+                        df_agg=agg,
+                        geo_features=GEO_FEATURES,
+                        geo_df=GEO_DF,
+                        show_popups=show_popups,
+                        patrol=st.session_state.get("patrol"),
+                        show_hotspot=True,
+                        perm_hotspot_mode="heat",
+                        show_temp_hotspot=True,
+                        temp_hotspot_points=temp_points,
+                    )
+
+                # build_map_fast LayerControl eklediyse kaldır
+                for k, ch in list(m._children.items()):
+                    if isinstance(ch, folium.map.LayerControl):
+                        del m._children[k]
+
+                # — Taban katman + açık atıf (OSM & CARTO) —
+                folium.TileLayer(
+                    tiles="CartoDB positron",
+                    name="cartodbpositron",
+                    control=True,
+                    attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+                    'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                ).add_to(m)
+
+                # — Katman menüsü: tek ikon, kapalı (collapsed) —
+                folium.LayerControl(position="topright", collapsed=True, autoZIndex=True).add_to(m)
+
+                ret = st_folium(
+                    m,
+                    key="riskmap",
+                    height=540,
+                    width=800,
+                    returned_objects=["last_object_clicked", "last_clicked"],
+                )
+                if ret:
+                    gid, _ = resolve_clicked_gid(GEO_DF, ret)
+                    if gid:
+                        st.session_state["explain"] = {"geoid": gid}
+            else:
+                # pydeck
+                if build_map_fast_deck is None:
+                    st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
+                else:
+                    deck = build_map_fast_deck(
+                        df_agg=agg,
+                        geo_df=GEO_DF,
+                        show_hotspot=True,  # kalıcı hotspot (üst %10)
+                        show_temp_hotspot=show_temp_hotspot,  # geçici hotspot
+                        temp_hotspot_points=temp_points,
+                        show_risk_layer=True,  # risk katmanı (tier paletine göre)
+                        map_style=(
+                            "mapbox://styles/mapbox/dark-v11"
+                            if st.session_state.get("dark_mode")
+                            else "mapbox://styles/mapbox/light-v11"
+                        ),
+                        initial_view={"lat": 37.7749, "lon": -122.4194, "zoom": 11.8},
+                    )
+                    st.pydeck_chart(deck)
+        else:
+            st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
+
+        # Açıklama kartı
+        start_iso = st.session_state.get("start_iso")
+        horizon_h = st.session_state.get("horizon_h")
+        info = st.session_state.get("explain")
+        if info and info.get("geoid"):
+            render_result_card(agg, info["geoid"], start_iso, horizon_h)
+        else:
+            st.info("Haritada bir hücreye tıklayın; kart burada görünecek.")
+
+    # Sağ panel – özetler
+    with col2:
+        st.subheader("Risk Özeti", anchor=False)
+        a = st.session_state.get("agg")
+        if isinstance(a, pd.DataFrame) and not a.empty:
+            kpi_expected = round(float(a["expected"].sum()), 2)
+            cnts = {
+                "Çok Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Çok Yüksek").sum()),
+                "Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Yüksek").sum()),
+                "Orta": int((a.get("tier", pd.Series(dtype=str)) == "Orta").sum()),
+                "Düşük": int((a.get("tier", pd.Series(dtype=str)) == "Düşük").sum()),
+                "Çok Düşük": int((a.get("tier", pd.Series(dtype=str)) == "Çok Düşük").sum()),
+            }
+            render_kpi_row(
+                [
+                    ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
+                    ("Çok Yüksek", cnts["Çok Yüksek"], "En yüksek riskli hücre sayısı (üst %20)"),
+                    ("Yüksek", cnts["Yüksek"], "Yüksek kademe riskli hücre sayısı"),
+                    ("Orta", cnts["Orta"], "Orta kademe riskli hücre sayısı"),
+                    ("Düşük", cnts["Düşük"], "Düşük kademe riskli hücre sayısı"),
+                    ("Çok Düşük", cnts["Çok Düşük"], "En düşük riskli hücre sayısı (alt %20)"),
+                ]
+            )
+        else:
+            st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
+
+        st.subheader("Top-5 kritik GEOID")
+        if isinstance(a, pd.DataFrame) and not a.empty:
+            tab = top_risky_table(
+                a,
+                n=5,
+                show_ci=show_advanced,
+                start_iso=st.session_state.get("start_iso"),
+                horizon_h=int(st.session_state.get("horizon_h") or 0),
+            )
+            st.dataframe(tab, use_container_width=True, height=300)
+            st.caption(
+                "P(≥1)%: Seçilen ufukta en az bir olay olma olasılığı."
+                if not show_advanced
+                else "95% GA: λ ± 1.96·√λ (alt sınır 0'a kırpılır)."
+            )
+
+        st.subheader("Devriye özeti")
+        if isinstance(a, pd.DataFrame) and not a.empty and btn_patrol:
+            st.session_state["patrol"] = allocate_patrols(
+                a,
+                GEO_DF,
+                k_planned=int(K_planned),
+                duty_minutes=int(duty_minutes),
+                cell_minutes=int(cell_minutes),
+                travel_overhead=0.40,
+            )
+
+        patrol = st.session_state.get("patrol")
+        if patrol and patrol.get("zones"):
+            rows = [
+                {
+                    "zone": z["id"],
+                    "cells_planned": z["planned_cells"],
+                    "capacity_cells": z["capacity_cells"],
+                    "eta_minutes": z["eta_minutes"],
+                    "utilization_%": z["utilization_pct"],
+                    "avg_risk(E[olay])": round(z["expected_risk"], 2),
+                }
+                for z in patrol["zones"]
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=260)
+
+        st.subheader("Gün × Saat Isı Matrisi")
+        if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
+            render_day_hour_heatmap(
+                st.session_state["agg"],
+                st.session_state.get("start_iso"),
+                st.session_state.get("horizon_h"),
+            )
+        else:
+            st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
+
+        st.subheader("Dışa aktar")
+        if isinstance(a, pd.DataFrame) and not a.empty:
+            csv = a.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "CSV indir",
+                data=csv,
+                file_name=f"risk_export_{int(time.time())}.csv",
+                mime="text/csv",
+            )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEKME: Raporlar
+# ─────────────────────────────────────────────────────────────────────────────
+elif sekme == "Raporlar":
+    agg_current = st.session_state.get("agg")
+    agg_long = st.session_state.get("agg_long")
+    events_src = st.session_state.get("events")
+    if not isinstance(events_src, pd.DataFrame) or events_src.empty:
+        events_src = st.session_state.get("events_df")
+    render_reports(events_df=events_src, agg_current=agg_current, agg_long_term=agg_long)
