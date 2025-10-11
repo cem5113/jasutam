@@ -204,8 +204,8 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
 # ───────────────────────────── PALET / RENK EŞLEYİCİ (REVİZE) ─────────────────────────────
 # 5'li skala (en kapsamlı)
 PALETTE_5: dict[str, str] = {
-    "Çok Yüksek": "#FF6666",  # koyu kırmızı
-    "Yüksek":     "#EF3B2C",  # kırmızı
+    "Çok Yüksek": "#EF3B2C",  # koyu kırmızı
+    "Yüksek":     "#FFC07A",  # kırmızı
     "Orta":       "#4A90D9",  # turuncu
     "Düşük":      "#6BAED6",  # mavi
     "Çok Düşük":  "#C6DBEF",  # açık mavi
@@ -213,15 +213,15 @@ PALETTE_5: dict[str, str] = {
 
 # 4'lü skala
 PALETTE_4: dict[str, str] = {
-    "Çok Yüksek": "#FF6666",  # koyu kırmızı
-    "Yüksek":     "#EF3B2C",  # kırmızı
+    "Çok Yüksek": "#EF3B2C",  # koyu kırmızı
+    "Yüksek":     "#FFC07A",  # kırmızı
     "Orta":       "#4A90D9",  # turuncu
     "Düşük":      "#6BAED6",  # mavi
 }
 
 # 3'lü skala (geriye uyumluluk)
 PALETTE_3: dict[str, str] = {
-    "Yüksek":     "#EF3B2C",  # kırmızı
+    "Yüksek":     "#FFC07A",  # kırmızı
     "Orta":       "#4A90D9",  # turuncu
     "Düşük":      "#6BAED6",  # mavi
 }
