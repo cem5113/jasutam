@@ -6,19 +6,19 @@ import time
 import folium
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from services.metrics import get_latest_metrics, update_from_csv, METRICS_FILE
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
-# Yerel paket yolları
+# ── Yerel paket yolları ─────────────────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# Yerel modüller
+# ── Yerel modüller ──────────────────────────────────────────────────────────
+from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
 from utils.patrol import allocate_patrols
@@ -29,8 +29,10 @@ from utils.ui import (
     render_kpi_row,
     render_day_hour_heatmap as fallback_heatmap,
 )
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
+
+# Artifact tabanlı metrikler (loaders.py ile aynı mantık services/metrics.py içinde)
+from services.metrics import get_latest_metrics, update_from_csv, METRICS_FILE
 
 # Opsiyonel modüller
 try:
@@ -45,7 +47,6 @@ except ModuleNotFoundError:
 try:
     from utils.heatmap import render_day_hour_heatmap  # type: ignore
 except ImportError:
-    # Geriye dönük uyumluluk: utils.ui içindeki fonksiyonu kullan
     render_day_hour_heatmap = fallback_heatmap  # type: ignore
 
 try:
@@ -94,7 +95,6 @@ except Exception:
 # ─────────────────────────────────────────────────────────────────────────────
 # Yardımcılar
 # ─────────────────────────────────────────────────────────────────────────────
-
 def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
     """DataFrame'de KEY_COL adını garanti eder ve string'e çevirir."""
     if df is None or df.empty:
@@ -215,7 +215,7 @@ def run_prediction(
         filters=filters,
     )
 
-    # Sağlam kademe sınıflayıcı: expected → ['Çok Düşük','Düşük','Orta','Yüksek','Çok Yüksek']
+    # Sağlam kademe sınıflayıcı
     def assign_tier_safe(agg_in: pd.DataFrame) -> pd.DataFrame:
         if agg_in is None or agg_in.empty or "expected" not in agg_in.columns:
             return agg_in
@@ -229,12 +229,10 @@ def run_prediction(
         out["expected"] = x
         labels5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
 
-        # Veri çeşitliliği azsa tek seviyeye düş
         if x.nunique(dropna=True) < 5 or x.count() < 5:
             out["tier"] = "Çok Düşük"
             return out
 
-        # qcut ile dene
         try:
             out["tier"] = pd.qcut(x, q=5, labels=labels5, duplicates="drop").astype(str)
             if out["tier"].isna().all():
@@ -243,7 +241,6 @@ def run_prediction(
         except Exception:
             pass
 
-        # Elle kantil: epsilon ile kenarları ayır
         try:
             q = np.quantile(x.to_numpy(), [0.20, 0.40, 0.60, 0.80]).astype(float)
             eps = max(1e-9, 1e-6 * float(np.nanmax(x) - np.nanmin(x)))
@@ -272,11 +269,10 @@ def run_prediction(
             out["tier"] = [fallback(float(v)) for v in x]
             return out
 
-    # Eski pd.cut temelli kademe bloğu kaldırıldı; güvenli sınıflayıcı uygulanıyor
     agg = assign_tier_safe(agg)
     agg = ensure_keycol(agg, KEY_COL)
 
-    # Uzun ufuk referansı (30 gün geriden bugüne)
+    # Uzun ufuk referansı (30 gün)
     try:
         long_start_iso = (
             datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET - 30 * 24)
@@ -332,15 +328,33 @@ def top_risky_table(
     drop = ["expected"] + (["nr_boost"] if "nr_boost" in df.columns else [])
     return df.drop(columns=drop)
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # UI: Sayfa & Başlık
 # ─────────────────────────────────────────────────────────────────────────────
-
 st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
+# Çevre değişken bilgilendirmesi (artifact akışı için)
+GH_TOKEN = os.getenv("GH_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "cem5113/crime_prediction_data")
+GITHUB_ARTIFACT_NAME = os.getenv("GITHUB_ARTIFACT_NAME", "sutam-results")
+
+with st.expander("⚙️ Artifact ayarları", expanded=False):
+    st.caption(
+        "Metrikler, öncelikle GitHub Actions artifact içindeki **metrics_all.csv** dosyasından okunur. "
+        "Aşağıdaki değişkenler kullanılacak:"
+    )
+    st.code(
+        f"GH_TOKEN={'<set>' if GH_TOKEN else '<EMPTY>'}\n"
+        f"GITHUB_REPO={GITHUB_REPO}\n"
+        f"GITHUB_ARTIFACT_NAME={GITHUB_ARTIFACT_NAME}",
+        language="bash",
+    )
+    if not GH_TOKEN:
+        st.warning("GH_TOKEN tanımlı değil. Artifact erişimi başarısız olabilir, yerel/zip fallback devreye girer.")
+
+# Üst metrik kartları (önceden kaydedilmiş JSON’dan)
 metrics = get_latest_metrics()
 if metrics:
     col1, col2, col3 = st.columns(3)
@@ -351,10 +365,9 @@ if metrics:
     if metrics.get("brier") is not None:
         col3.metric("Brier Score", f"{metrics['brier']:.3f}")
 else:
-    # İstersen bu teşhis satırını kaldırabilirsin
     st.caption(f"📊 KPI için ölçüm dosyası bulunamadı: {METRICS_FILE}")
 
-# Veri sonu
+# Veri sonu / olaylar
 try:
     _events_df = load_events_safe()
     st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
@@ -387,7 +400,7 @@ if GEO_DF.empty:
 # Model tabanı
 BASE_INT = precompute_base_intensity(GEO_DF)
 
-# Sidebar
+# ── Sidebar ─────────────────────────────────────────────────────────────────
 st.sidebar.markdown("### Görünüm")
 sekme_options = ["Operasyon"] + (["Raporlar"] if HAS_REPORTS else [])
 sekme = st.sidebar.radio("", options=sekme_options, index=0, horizontal=True)
@@ -415,11 +428,9 @@ hotspot_cat = st.sidebar.selectbox(
 use_hot_hours = st.sidebar.checkbox("Geçici hotspot için gün içi saat filtresi", value=False)
 hot_hours_rng = st.sidebar.slider("Saat aralığı (hotspot)", 0, 24, (0, 24), disabled=not use_hot_hours)
 
-# Zaman ufku (gerçek zamanlı gösterim)
-current_time = datetime.now().strftime('%H:%M')
-current_date = datetime.now().strftime('%Y-%m-%d')
-ufuk_label = f"Zaman Aralığı (from {current_time}, today, {current_date})"
-
+# Zaman ufku (etiket: SF saati)
+_sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
+ufuk_label = f"Zaman Aralığı (başlangıç: {_sf_now.strftime('%H:%M')} • {_sf_now.strftime('%Y-%m-%d')} SF time)"
 ufuk = st.sidebar.radio(ufuk_label, ["24s", "48s", "7g"], index=0, horizontal=True)
 max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7*24, 24)
 start_h, end_h = st.sidebar.slider("Saat filtresi", min_value=0, max_value=max_h, value=(0, max_h), step=step)
@@ -440,7 +451,12 @@ colA, colB = st.sidebar.columns(2)
 btn_predict = colA.button("Tahmin et")
 btn_patrol = colB.button("Devriye öner")
 
-# State
+# Metrikleri yenile butonu / tek seferlik init
+st.sidebar.divider()
+btn_refresh_metrics = st.sidebar.button("🔄 Metrikleri artifact'tan yenile")
+st.session_state.setdefault("_metrics_refreshed_once", False)
+
+# ── State ───────────────────────────────────────────────────────────────────
 st.session_state.setdefault("agg", None)
 st.session_state.setdefault("agg_long", None)
 st.session_state.setdefault("patrol", None)
@@ -502,29 +518,27 @@ if sekme == "Operasyon":
         if isinstance(agg, pd.DataFrame):
             if "neighborhood" not in agg.columns and "neighborhood" in GEO_DF.columns:
                 try:
-                    from utils.geo import join_neighborhood  # 2. adımda eklediğimiz yardımcı
+                    from utils.geo import join_neighborhood  # opsiyonel yardımcı
                     agg = join_neighborhood(agg, GEO_DF)
                 except Exception:
-                    # utils.geo.join_neighborhood yoksa sessizce geç
                     pass
 
-        # — HARİTA — (gömülü katman simgesi = sağ üst ikon)
+        # — HARİTA —
         if agg is not None:
             if engine == "Folium":
                 try:
-                    # build_map_fast varsa LayerControl'u biz ekleyeceğiz
                     m = build_map_fast(
                         df_agg=agg,
                         geo_features=GEO_FEATURES,
                         geo_df=GEO_DF,
                         show_popups=show_popups,
                         patrol=st.session_state.get("patrol"),
-                        # hotspot katmanlarını üret
+                        # hotspot katmanları
                         show_hotspot=True,
                         perm_hotspot_mode="heat",
                         show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
-                        # kendi kontrolümüzü ekleyeceğiz
+                        # LayerControl'u biz ekleyeceğiz
                         add_layer_control=False,
                         risk_layer_show=True,
                         perm_hotspot_show=True,
@@ -552,7 +566,7 @@ if sekme == "Operasyon":
                     if isinstance(ch, folium.map.LayerControl):
                         del m._children[k]
 
-                # — Taban katman + açık atıf (OSM & CARTO) —
+                # Taban katman + atıf
                 folium.TileLayer(
                     tiles="CartoDB positron",
                     name="cartodbpositron",
@@ -561,7 +575,7 @@ if sekme == "Operasyon":
                     'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
                 ).add_to(m)
 
-                # — Katman menüsü: tek ikon, kapalı (collapsed) —
+                # Katman menüsü
                 folium.LayerControl(position="topright", collapsed=True, autoZIndex=True).add_to(m)
 
                 ret = st_folium(
@@ -583,10 +597,10 @@ if sekme == "Operasyon":
                     deck = build_map_fast_deck(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        show_hotspot=True,  # kalıcı hotspot (üst %10)
+                        show_hotspot=True,              # kalıcı hotspot (üst %10)
                         show_temp_hotspot=show_temp_hotspot,  # geçici hotspot
                         temp_hotspot_points=temp_points,
-                        show_risk_layer=True,  # risk katmanı (tier paletine göre)
+                        show_risk_layer=True,           # risk katmanı
                         map_style=(
                             "mapbox://styles/mapbox/dark-v11"
                             if st.session_state.get("dark_mode")
@@ -684,32 +698,34 @@ if sekme == "Operasyon":
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
-        
-        # ── Güncel Model Metrikleri (artifact → JSON → göster) ───────────────────────
+
+        # ── Güncel Model Metrikleri (artifact → JSON → göster) ─────────────────
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
-        
-        # 1) Artifact'tan otomatik güncelle (CSV/ZIP'i özyinelemeli arar)
-        with st.spinner("Artifact'tan metrikler çekiliyor..."):
-            try:
-                hit_col_env = os.environ.get("SUTAM_HIT_COL")            # örn: "hit_rate@100"
-                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")       # opsiyonel (örn. "stacking")
-                update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
-            except FileNotFoundError:
-                st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
-            except Exception as e:
-                st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
-        
+
+        # 1) Artifact'tan tek seferlik otomatik güncelle + manuel yenile butonu
+        should_refresh = (not st.session_state["_metrics_refreshed_once"]) or btn_refresh_metrics
+        if should_refresh:
+            with st.spinner("Artifact'tan metrikler çekiliyor..."):
+                try:
+                    hit_col_env = os.environ.get("SUTAM_HIT_COL")       # örn: "hit_rate@100"
+                    prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")  # opsiyonel (örn. "stacking")
+                    update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
+                    st.session_state["_metrics_refreshed_once"] = True
+                except FileNotFoundError:
+                    st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
+                except Exception as e:
+                    st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
+
         # 2) JSON'dan oku ve göster
         m = get_latest_metrics()
         if m:
-            # Öncelik: PR-AUC > ROC AUC/f1
             pr_auc = m.get("pr_auc")
             rocauc = m.get("auc")            # ROC AUC ya da f1 ile doldurulmuş olabilir
             k_hit  = m.get("hit_rate_topk")
             brier  = m.get("brier")
-        
+
             cols = st.columns(3)
             if pr_auc is not None:
                 cols[0].metric("PR-AUC", f"{pr_auc:.3f}")
@@ -719,13 +735,16 @@ if sekme == "Operasyon":
                 cols[1].metric("HitRate@TopK", f"{k_hit*100:.1f}%")
             if brier is not None:
                 cols[2].metric("Brier Score", f"{brier:.3f}")
-        
+
             # Kaynak ve seçim bilgisi
             meta_bits = []
             if m.get("model_name"):
                 meta_bits.append(f"Model: **{m['model_name']}**")
             if m.get("selection_metric") and m.get("selection_value") is not None:
-                meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']:.3f}**")
+                try:
+                    meta_bits.append(f"Seçim: **{m['selection_metric']}={float(m['selection_value']):.3f}**")
+                except Exception:
+                    meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']}**")
             try:
                 rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
             except Exception:
@@ -734,7 +753,7 @@ if sekme == "Operasyon":
             if m.get("source_path"):
                 meta_bits.append(f"Kaynak: `{m['source_path']}`")
             if m.get("timestamp"):
-                meta_bits.append(f"TS: {m['timestamp']}")
+                meta_bits.append(f"TS: {m['timestamp']}`")
             st.caption(" · ".join(meta_bits))
         else:
             try:
@@ -742,7 +761,7 @@ if sekme == "Operasyon":
             except Exception:
                 rel_path = METRICS_FILE
             st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
-                
+
         st.subheader("Dışa aktar")
         if isinstance(a, pd.DataFrame) and not a.empty:
             csv = a.to_csv(index=False).encode("utf-8")
