@@ -12,6 +12,20 @@ from utils.constants import KEY_COL
 SF_CENTER: Tuple[float, float] = (37.7749, -122.4194)  # (lat, lon)
 SF_ZOOM: int = 12
 
+def join_neighborhood(df_agg: pd.DataFrame, geo_df: pd.DataFrame) -> pd.DataFrame:
+    """df_agg + geo_df → neighborhood ekler (varsa). KEY_COL ile eşler."""
+    if df_agg is None or df_agg.empty:
+        return df_agg
+    if "neighborhood" in df_agg.columns:
+        return df_agg
+    if geo_df is None or geo_df.empty or "neighborhood" not in geo_df.columns:
+        return df_agg
+    a = df_agg.copy()
+    a[KEY_COL] = a[KEY_COL].astype(str)
+    g = geo_df[[KEY_COL, "neighborhood"]].copy()
+    g[KEY_COL] = g[KEY_COL].astype(str)
+    return a.merge(g, on=KEY_COL, how="left")
+
 def polygon_centroid(lonlat_loop: List[List[float]] | List[Tuple[float, float]]):
     """Basit poligon centroid (lon, lat) → (Cx, Cy). İlk/son nokta kapalıysa sonu atla."""
     x, y = zip(*lonlat_loop)
