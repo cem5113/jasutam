@@ -59,6 +59,30 @@ def hit_rate_topk(y_true: np.ndarray, y_score: np.ndarray, k: int) -> float:
     topk_idx = order[:k_eff]
     return float(np.mean(y_true[topk_idx]))
 
+def _auc_manual(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    """
+    ROC AUC'yi sklearn olmadan hesapla (Mann–Whitney U / rank tabanlı).
+    Tüm skorlar eşitse veya tek sınıf varsa 0.5 döner.
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_score = np.asarray(y_score).astype(float)
+    n_pos = int(np.sum(y_true == 1))
+    n_neg = int(np.sum(y_true == 0))
+    if n_pos == 0 or n_neg == 0:
+        return 0.5
+    # Pandas rank ile bağları average rank yap
+    ranks = pd.Series(y_score).rank(method="average").to_numpy()
+    pos_rank_sum = float(np.sum(ranks[y_true == 1]))
+    auc = (pos_rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+    if not np.isfinite(auc):
+        return 0.5
+    return float(auc)
+
+def _brier_manual(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    y_true = np.asarray(y_true).astype(float)
+    y_score = np.asarray(y_score).astype(float)
+    return float(np.mean((y_score - y_true) ** 2))
+
 # ───────────── 1) Veri güncelle (placeholder/sentetik) ─────────────
 def update_raw_data(raw_dir: str, out_events: str, *, tz_off: int, since_days: int = 30) -> dict:
     """
@@ -151,7 +175,7 @@ def train_and_evaluate(events_csv: str, topk: int) -> Tuple[float, float, float]
     # Train/test ayır
     n = len(y)
     if n < 50:
-        # çok az veri: frekans tabanı
+        # çok az veri: frekans tabanı (tamamen sklearnsüz)
         return _metrics_via_frequency(types, y, topk)
 
     idx = np.arange(n)
@@ -162,8 +186,8 @@ def train_and_evaluate(events_csv: str, topk: int) -> Tuple[float, float, float]
 
     X_tr, X_te = X[tr], X[te]
     y_tr, y_te = y[tr], y[te]
+    types_tr, types_te = types.iloc[tr], types.iloc[te]
 
-    y_proba_te = None
     try:
         # Sklearn ile lojistik regresyon
         from sklearn.linear_model import LogisticRegression
@@ -176,29 +200,36 @@ def train_and_evaluate(events_csv: str, topk: int) -> Tuple[float, float, float]
         auc = float(roc_auc_score(y_te, y_proba_te)) if len(np.unique(y_te)) > 1 else 0.5
         brier = float(brier_score_loss(y_te, y_proba_te))
         hit = float(hit_rate_topk(y_te, y_proba_te, k=topk))
-
         return auc, hit, brier
 
     except Exception:
-        # Sklearn yoksa frekans tabanı (type'a göre olasılık)
-        return _metrics_via_frequency(types.iloc[te], y_te, topk)
+        # Sklearn yoksa: eğitim frekansı → test olasılığı; metrikler manuel
+        return _metrics_via_frequency(types_te, y_te, topk)
 
 def _metrics_via_frequency(types_df: pd.DataFrame, y_true: np.ndarray, topk: int) -> Tuple[float, float, float]:
     """
-    Yedek (sklearn yok): her type için pozitif oranını olasılık olarak kullan.
+    Yedek (sklearn yok): one-hot 'types_df' üzerinden p(positive|type) frekansı ile
+    olasılık hesapla; AUC ve Brier'ı tamamen NumPy/Pandas ile hesapla.
     """
-    from sklearn.metrics import roc_auc_score, brier_score_loss  # çoğu ortamda mevcut; yoksa try/except ekleyebilirsin
-    # Eğitim frekansını tüm veri üzerinde yaklaşıkla: p(positive|type)
-    probs_by_type = (pd.concat([types_df.reset_index(drop=True), pd.Series(y_true, name="y")], axis=1)
-                     .groupby(types_df.columns.tolist())["y"].mean().to_dict())
-    # satır satır olasılık üret
-    def row_prob(row):
+    y_true = np.asarray(y_true).astype(int)
+
+    # p(y=1 | type-vector) ~ ortalama(y) for that vector
+    df_tmp = types_df.copy()
+    df_tmp["__y__"] = y_true
+    grp_cols = [c for c in types_df.columns]
+    probs_map = df_tmp.groupby(grp_cols)["__y__"].mean()
+
+    # satır satır olasılık tahmini (bilinmeyen kombinasyonlar için global pozitif oran)
+    global_p = float(np.mean(y_true)) if len(y_true) else 0.0
+    def row_prob(row: pd.Series) -> float:
         key = tuple(int(v) for v in row.tolist())
-        return float(probs_by_type.get(key, np.mean(y_true)))
+        return float(probs_map.get(key, global_p))
+
     y_proba = types_df.apply(row_prob, axis=1).to_numpy(dtype=float)
 
-    auc = float(roc_auc_score(y_true, y_proba)) if len(np.unique(y_true)) > 1 else 0.5
-    brier = float(brier_score_loss(y_true, y_proba))
+    # metrikler (manuel)
+    auc = _auc_manual(y_true, y_proba) if len(np.unique(y_true)) > 1 else 0.5
+    brier = _brier_manual(y_true, y_proba)
     hit = float(hit_rate_topk(y_true, y_proba, k=topk))
     return auc, hit, brier
 
@@ -237,7 +268,7 @@ def main():
     print(f"  ✓ events.csv güncellendi (toplam:{stats['rows_total']}, eklenen:{stats['rows_added']})")
 
     # 2) Özellikler
-    fstats = build_features(out_dir)
+    _ = build_features(out_dir)
     print("  ✓ features üretildi")
 
     # 3) Model + 3.5) Değerlendirme (METRICS)
@@ -250,7 +281,7 @@ def main():
         print("  ✓ latest_metrics.json yazıldı")
 
     # 4) Çıktılar
-    ostats = produce_outputs(out_dir)
+    _ = produce_outputs(out_dir)
     print("  ✓ çıktılar üretildi")
 
     # 5) Meta (rozete bilgi)
