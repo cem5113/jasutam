@@ -343,9 +343,6 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-# Sidebar veya ana sayfada göstermek için:
-st.sidebar.caption(f"🕒 {ufuk_label}")
-
 metrics = get_latest_metrics()
 if metrics:
     col1, col2, col3 = st.columns(3)
