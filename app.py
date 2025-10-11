@@ -352,51 +352,58 @@ if sekme == "Operasyon":
 
         st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
 
+# ───────────────────────────────
+# Harita ve sağ panel
+# ───────────────────────────────
 if agg is not None:
     if engine == "Folium":
-        # --- Sidebar'da katman görünürlüğü kontrolü ---
-        risk_layer_show     = st.sidebar.checkbox("Tahmin (risk) katmanı", value=True)
-        perm_hotspot_show   = st.sidebar.checkbox("Hotspot (kalıcı)", value=True)
-        temp_hotspot_show   = st.sidebar.checkbox("Hotspot (geçici)", value=True)
+        # Folium harita (LayerControl sadece harita üstünde)
+        try:
+            m = build_map_fast(
+                df_agg=agg,
+                geo_features=GEO_FEATURES,
+                geo_df=GEO_DF,
+                show_popups=show_popups,
+                patrol=st.session_state.get("patrol"),
 
-        # Katman adları
-        risk_layer_name         = "Tahmin (risk)"
-        perm_hotspot_layer_name = "Hotspot (kalıcı)"
-        temp_hotspot_layer_name = "Hotspot (geçici)"
+                # katman üretimi
+                show_hotspot=True,                 # kalıcı hotspot üret
+                perm_hotspot_mode="heat",
+                show_temp_hotspot=True,            # geçici hotspot ısı haritası
+                temp_hotspot_points=temp_points,
 
-        # Folium harita
-        m = build_map_fast(
-            df_agg=agg,
-            geo_features=GEO_FEATURES,
-            geo_df=GEO_DF,
-            show_popups=show_popups,
-            patrol=st.session_state.get("patrol"),
-            show_hotspot=perm_hotspot_show,            # kalıcı hotspot görünürlüğü
-            perm_hotspot_mode="heat",
-            show_temp_hotspot=temp_hotspot_show,       # geçici hotspot görünürlüğü
-            temp_hotspot_points=temp_points,
-            add_layer_control=True,                    # LayerControl ekle
-            risk_layer_show=risk_layer_show,
-            perm_hotspot_show=perm_hotspot_show,
-            temp_hotspot_show=temp_hotspot_show,
-            risk_layer_name=risk_layer_name,
-            perm_hotspot_layer_name=perm_hotspot_layer_name,
-            temp_hotspot_layer_name=temp_hotspot_layer_name,
-        )
+                # LayerControl harita içinde; başlangıçta hepsi açık
+                add_layer_control=True,
+                risk_layer_show=True,
+                perm_hotspot_show=True,
+                temp_hotspot_show=True,
+                risk_layer_name="Tahmin (risk)",
+                perm_hotspot_layer_name="Hotspot (kalıcı)",
+                temp_hotspot_layer_name="Hotspot (geçici)",
+            )
+        except TypeError:
+            # Eski imza için geri dönüş
+            m = build_map_fast(
+                df_agg=agg,
+                geo_features=GEO_FEATURES,
+                geo_df=GEO_DF,
+                show_popups=show_popups,
+                patrol=st.session_state.get("patrol"),
+                show_hotspot=True,
+                perm_hotspot_mode="heat",
+                show_temp_hotspot=True,
+                temp_hotspot_points=temp_points,
+            )
 
-        import folium
-        assert isinstance(m, folium.Map), f"st_folium beklediği tipte değil: {type(m)}"
-
-        # Harita çizdir
         ret = st_folium(
             m,
             key="riskmap",
             height=540,
             width=1600,
-            returned_objects=["last_object_clicked", "last_clicked"]
+            returned_objects=["last_object_clicked", "last_clicked"],
         )
 
-        # Tıklanan GEOID açıklaması
+        # Tıklanan GEOID’yi yakala
         if ret:
             gid, _ = resolve_clicked_gid(GEO_DF, ret)
             if gid:
@@ -413,25 +420,14 @@ if agg is not None:
                 show_poi=show_poi,
                 show_transit=show_transit,
                 patrol=st.session_state.get("patrol"),
-                show_hotspot=show_hotspot,
-                show_temp_hotspot=show_temp_hotspot,
+                show_hotspot=True,
+                show_temp_hotspot=True,
                 temp_hotspot_points=temp_points,
             )
             st.pydeck_chart(deck)
             ret = None
 
-            # Açıklama kartı
-            start_iso  = st.session_state["start_iso"]
-            horizon_h  = st.session_state["horizon_h"]
-            st.caption("Ufuk: seçilen saat aralığı (SF).")
-
-            info = st.session_state.get("explain")
-            if info and info.get("geoid"):
-                render_result_card(agg, info["geoid"], start_iso, horizon_h)
-            else:
-                st.info("Haritada bir hücreye tıklayın veya listeden seçin; kart burada görünecek.")
-
-    # Sağ panel: risk özeti
+    # Sağ sütun (özetler)
     with col2:
         st.subheader("Risk Özeti", anchor=False)
 
@@ -458,11 +454,6 @@ if agg is not None:
 
         st.subheader("Top-5 kritik GEOID")
         if st.session_state.get("agg") is not None:
-            # burada Top-5 GEOID tablosu vs. devam eder...
-            pass
-else:
-    st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
-
             def top_risky_table(df_agg: pd.DataFrame, n: int = 5, show_ci: bool = False) -> pd.DataFrame:
                 # Poisson ~%95 güven aralığı (normal approx.)
                 def poisson_ci(lam: float, z: float = 1.96) -> tuple[float, float]:
@@ -473,7 +464,6 @@ else:
                 if "nr_boost" in df_agg.columns:
                     cols.append("nr_boost")
 
-                # KEY_COL güvenliği
                 df_agg2 = ensure_keycol(df_agg, KEY_COL)
 
                 tab = (
@@ -548,20 +538,24 @@ else:
 
         st.subheader("Gün × Saat Isı Matrisi")
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
-            render_day_hour_heatmap(st.session_state["agg"],
-                                    st.session_state.get("start_iso"),
-                                    st.session_state.get("horizon_h"))
+            render_day_hour_heatmap(
+                st.session_state["agg"],
+                st.session_state.get("start_iso"),
+                st.session_state.get("horizon_h")
+            )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
 
         st.subheader("Dışa aktar")
-        if st.session_state["agg"] is not None:
+        if st.session_state.get("agg") is not None:
             csv = st.session_state["agg"].to_csv(index=False).encode("utf-8")
             st.download_button(
                 "CSV indir", data=csv,
                 file_name=f"risk_export_{int(time.time())}.csv",
                 mime="text/csv"
             )
+else:
+    st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
 elif sekme == "Raporlar":
     agg_current = st.session_state.get("agg")
