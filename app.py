@@ -264,10 +264,6 @@ st.sidebar.divider()
 
 st.sidebar.header("Devriye Parametreleri")
 engine = st.sidebar.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
-with st.expander("Katmanlar", expanded=False):
-    show_risk_layer   = st.checkbox("Tahmin (risk)", True)
-    show_temp_hotspot = st.checkbox("Hotspot (geçici)", True)
-    show_perm_hotspot = st.checkbox("Hotspot (kalıcı)", True)
     
 st.sidebar.subheader("Harita katmanları")
 show_poi = st.sidebar.checkbox("POI overlay", value=False)
