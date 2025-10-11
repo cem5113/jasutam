@@ -1,35 +1,39 @@
 # utils/constants.py
 
-# ——— Zaman Dilimi / Model Bilgisi ———
-SF_TZ_OFFSET = -7  # America/Los_Angeles (yaz saati için -7, kışın -8 olabilir)
-MODEL_VERSION = "v0.1.0"
+# ── Zaman dilimi / model bilgisi ──────────────────────────────────────────────
+SF_TZ_OFFSET     = -7
+MODEL_VERSION    = "v0.1.0"
 MODEL_LAST_TRAIN = "2025-10-04"
-CACHE_VERSION = "v2-geo-poisson"
+CACHE_VERSION    = "v2-geo-poisson"
 
-# ——— Ana anahtar ———
-# Tüm veri birleşimleri ve GeoJSON özellikleri bu kolon adıyla yapılır.
-KEY_COL = "GEOID"
+# ── Ana anahtar sütun adı (VERİDE küçük harf!) ───────────────────────────────
+# Not: Veri ve GeoJSON tarafında alan ismi 'geoid' (küçük). Diğer modüller,
+# gerektiğinde büyük/küçük eşlemesini kendi içinde zaten tolere ediyor.
+KEY_COL = "geoid"
 
-# ——— Suç türleri (model çıktısındaki kolonlar) ———
-# Not: Şu an model şu 5 sütunu üretir. Ayrı "vehicle_theft" sütunu yoksa buraya ekleme!
+# Uyumlu alan adları (bazı dosyalarda GEOID / id gelebilir)
+KEY_COL_ALIASES = ["geoid", "GEOID", "id"]
+
+# ── Modelin ürettiği suç türleri (kolonlar) ───────────────────────────────────
 CRIME_TYPES = ["assault", "burglary", "theft", "robbery", "vandalism"]
 
-# ——— UI listeleri ———
+# ── UI listeleri ──────────────────────────────────────────────────────────────
 CATEGORIES = ["Assault", "Burglary", "Robbery", "Theft", "Vandalism", "Vehicle Theft"]
-DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-SEASONS = ["Winter", "Spring", "Summer", "Autumn"]
+DAYS      = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+SEASONS   = ["Winter", "Spring", "Summer", "Autumn"]
 
-# ——— Kategori → kolon eşleme ———
-# Araç hırsızlığı ayrı kolon olarak üretilmiyorsa (şu an yok),
-# filtre işlesin diye "theft"e yönlendiriyoruz. İleride "vehicle_theft"
-# kolonu eklersen sadece bu satırı güncelle:
-#   "Vehicle Theft": ["vehicle_theft"]
+# ── Kategori → kolon eşleme ──────────────────────────────────────────────────
+# Not: 'Vehicle Theft' ayrı kolonlar içeriyorsa (vehicle_theft/auto_theft/...),
+# bunlar kullanılır; yoksa app tarafındaki filtre 'present columns' kontrolü
+# yaptığından sessizce atlanır.
 CATEGORY_TO_KEYS = {
-    "Assault": ["assault"],
-    "Burglary": ["burglary"],
-    "Robbery": ["robbery"],
-    "Theft": ["theft"],                 # larceny vb. alt kodlar bu kolonda birleşik
-    "Vandalism": ["vandalism"],
-    "Vehicle Theft": ["theft"],         # geçici eşleme; ayrı kolon gelince değiştir
+    "Assault"       : ["assault"],
+    "Burglary"      : ["burglary"],
+    "Robbery"       : ["robbery"],
+    "Theft"         : ["theft", "larceny"],
+    "Vandalism"     : ["vandalism"],
+    "Vehicle Theft" : ["vehicle_theft", "auto_theft", "motor_vehicle_theft"],
 }
 
+# (Opsiyonel) 5 kademeli tier etiketleri – UI tarafında işinize yararsa:
+TIER_LEVELS_5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
