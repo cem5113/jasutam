@@ -406,13 +406,9 @@ if sekme == "Operasyon":
                     autoZIndex=True
                 ).add_to(m)
                 
-                # Çizdir
                 ret = st_folium(
-                    m,
-                    key="riskmap",
-                    height=540,
-                    width=1200,
-                    returned_objects=["last_object_clicked", "last_clicked"],
+                    m, key="riskmap", height=540,
+                    returned_objects=["last_object_clicked", "last_clicked"]
                 )
                 if ret:
                     gid, _ = resolve_clicked_gid(GEO_DF, ret)
