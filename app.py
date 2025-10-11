@@ -355,28 +355,56 @@ if sekme == "Operasyon":
         if agg is not None:
             if engine == "Folium":
                 # Folium harita
-                m = build_map_fast(
-                    df_agg=agg,
-                    geo_features=GEO_FEATURES,
-                    geo_df=GEO_DF,
-                    show_popups=show_popups,
-                    patrol=st.session_state.get("patrol"),
+                try:
+                    m = build_map_fast(
+                        df_agg=agg,
+                        geo_features=GEO_FEATURES,
+                        geo_df=GEO_DF,
+                        show_popups=show_popups,
+                        patrol=st.session_state.get("patrol"),
                 
-                    # katman üretimi:
-                    show_hotspot=show_hotspot,
-                    perm_hotspot_mode="heat",          # "markers" da olabilir
-                    show_temp_hotspot=show_temp_hotspot,
-                    temp_hotspot_points=temp_points,
+                        # katman üretimi:
+                        show_hotspot=show_hotspot,
+                        perm_hotspot_mode="heat",          # "markers" da olabilir
+                        show_temp_hotspot=show_temp_hotspot,
+                        temp_hotspot_points=temp_points,
                 
-                    # harita içi layer control + başlangıç görünürlüğü + isimler:
-                    add_layer_control=True,            # harita içinde LayerControl menüsü
-                    risk_layer_show=risk_layer_show,   # sidebar’daki checkbox ile senkron
-                    perm_hotspot_show=perm_hotspot_show,
-                    temp_hotspot_show=temp_hotspot_show,
-                    risk_layer_name=risk_layer_name,
-                    perm_hotspot_layer_name=perm_hotspot_layer_name,
-                    temp_hotspot_layer_name=temp_hotspot_layer_name,
+                        # sadece HARİTA İÇİN LayerControl; sidebar yok
+                        add_layer_control=True,            # harita üstünde katman düğmesi çıkar
+                        risk_layer_show=True,              # başlangıçta görünür
+                        perm_hotspot_show=True,
+                        temp_hotspot_show=True,
+                        risk_layer_name="Tahmin (risk)",
+                        perm_hotspot_layer_name="Hotspot (kalıcı)",
+                        temp_hotspot_layer_name="Hotspot (geçici)",
+                    )
+                except TypeError:
+                    # Eski build_map_fast imzası için geri düş (LayerControl parametreleri yoksa)
+                    m = build_map_fast(
+                        df_agg=agg,
+                        geo_features=GEO_FEATURES,
+                        geo_df=GEO_DF,
+                        show_popups=show_popups,
+                        patrol=st.session_state.get("patrol"),
+                        show_hotspot=show_hotspot,
+                        perm_hotspot_mode="heat",
+                        show_temp_hotspot=show_temp_hotspot,
+                        temp_hotspot_points=temp_points,
+                    )
+                
+                # render et ve tıklanan hücreyi yakala
+                ret = st_folium(
+                    m,
+                    key="riskmap",
+                    height=540,
+                    width=1600,  # istersen kaldır/azalt
+                    returned_objects=["last_object_clicked", "last_clicked"],
                 )
+                if ret:
+                    gid, _ = resolve_clicked_gid(GEO_DF, ret)
+                    if gid:
+                        st.session_state["explain"] = {"geoid": gid}
+
                 
                 # render et ve tıklanan hücreyi yakala
                 ret = st_folium(
