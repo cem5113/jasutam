@@ -19,7 +19,7 @@ _COLOR = {
     "Yüksek":     [255, 80, 40, 220],     # bazı modellerde 'Yüksek' olabilir
     "Çok Yüksek": [255, 40, 80, 230],
 }
-_DEF_COLOR = [166, 206, 227, 140]
+_DEF_COLOR = [90, 120, 140, 180]
 
 def _color_for(level: str):
     return _COLOR.get(str(level), _DEF_COLOR)
