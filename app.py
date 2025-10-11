@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
-from services.metrics import get_latest_metrics
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +31,7 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
-from services.metrics import get_latest_metrics, METRICS_FILE
+from services.metrics import get_latest_metrics, update_from_csv, find_latest_artifact, METRICS_FILE
 
 # Opsiyonel modüller
 try:
@@ -687,35 +686,54 @@ if sekme == "Operasyon":
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
 
-        from services.metrics import get_latest_metrics
+        from services.metrics import get_latest_metrics, update_from_csv, find_latest_artifact, METRICS_FILE
+        
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
         
-        m = get_latest_metrics()  # services/metrics.py: metrics_all.csv → latest_metrics.json → read
+        # 1️⃣ Artifact'tan otomatik güncelle
+        with st.spinner("Artifact'tan metrikler çekiliyor..."):
+            try:
+                hit_col_env = os.environ.get("SUTAM_HIT_COL")            
+                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP") or "stacking"
+                payload = update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
+        
+                m_dbg = get_latest_metrics()
+                if m_dbg:
+                    src = m_dbg.get("source_artifact", "(bilgi yok)")
+                    nm  = m_dbg.get("model_name", "(model adı yok)")
+                    grp = m_dbg.get("model_group", "(grup yok)")
+                    st.caption(f"✅ Artifact güncellendi → **{src}** · Model: **{nm}** · Grup: **{grp}**")
+                else:
+                    st.caption("⚠️ Artifact'tan çekildi ama latest_metrics.json okunamadı.")
+            except FileNotFoundError:
+                st.caption("⚠️ Artifact bulunamadı (crime_predict_data/data/artifacts altında metrics_all.csv veya metrics_all*.zip yok).")
+            except Exception as e:
+                st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
+        
+        # 2️⃣ JSON'dan oku ve göster
+        m = get_latest_metrics()
         if m:
             k1, k2, k3 = st.columns(3)
             if m.get("auc") is not None:
-                k1.metric("AUC (ROC)", f"{m['auc']:.3f}")
+                k1.metric("Seçim metriği (PR/ROC/F1)", f"{m['auc']:.3f}")
             if m.get("hit_rate_topk") is not None:
                 k2.metric("HitRate@TopK", f"{m['hit_rate_topk']*100:.1f}%")
             if m.get("brier") is not None:
                 k3.metric("Brier Score", f"{m['brier']:.3f}")
         
-            # Kaynak ve sürüm bilgisi (artefact -> json akışını şeffaf göster)
-            try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
-            except Exception:
-                rel_path = METRICS_FILE
-            ts_text = m.get("timestamp", "—")
-            st.caption(f"Kaynak: {rel_path} • Zaman damgası: {ts_text} • Model sürümü: {MODEL_VERSION}")
+            meta = []
+            if m.get("model_name"):
+                meta.append(f"Model: **{m['model_name']}**")
+            if m.get("model_group"):
+                meta.append(f"Grup: **{m['model_group']}**")
+            if m.get("source_artifact"):
+                meta.append(f"Kaynak: `{m['source_artifact']}`")
+            if meta:
+                st.caption(" · ".join(meta))
         else:
-            # Dosya yok/bozuksa sade uyarı (UI’yi bloklamadan)
-            try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
-            except Exception:
-                rel_path = METRICS_FILE
-            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
+            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({METRICS_FILE}).")
         
         st.subheader("Dışa aktar")
         if isinstance(a, pd.DataFrame) and not a.empty:
