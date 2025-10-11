@@ -687,6 +687,23 @@ if sekme == "Operasyon":
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
 
+        from services.metrics import get_latest_metrics
+        sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
+        label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
+        st.subheader(label, anchor=False)
+        m = get_latest_metrics()
+        if m:
+            k1, k2, k3 = st.columns(3)
+            if m.get("auc") is not None:
+                k1.metric("AUC (ROC)", f"{m['auc']:.3f}")
+            if m.get("hit_rate_topk") is not None:
+                k2.metric("HitRate@TopK", f"{m['hit_rate_topk']*100:.1f}%")
+            if m.get("brier") is not None:
+                k3.metric("Brier Score", f"{m['brier']:.3f}")
+        else:
+            # İstersen bu uyarıyı kaldırabilirsin
+            st.caption("📊 KPI dosyası bulunamadı veya geçersiz (data/latest_metrics.json).")
+        
         st.subheader("Dışa aktar")
         if isinstance(a, pd.DataFrame) and not a.empty:
             csv = a.to_csv(index=False).encode("utf-8")
