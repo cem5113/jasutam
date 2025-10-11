@@ -196,6 +196,7 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
     return f"{start:%H:%M}–{t2:%H:%M}"
 
 # ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
+# ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
 PALETTE_5 = {
     "Çok Yüksek": "#b10026",  # koyu kırmızı
     "Yüksek":     "#e31a1c",  # kırmızı
@@ -210,10 +211,10 @@ PALETTE_4 = {
     "Düşük":      "#1f77b4",
 }
 PALETTE_3 = {  # geriye uyumluluk (eski 3'lü/4'lüler)
-    "Yüksek": " #d62728",
-    "Orta":   " #ff7f0e",
-    "Düşük":  " #1f77b4",
-    "Hafif":  " #1f77b4",   
+    "Yüksek": "#d62728",
+    "Orta":   "#ff7f0e",
+    "Düşük":  "#1f77b4",
+    "Hafif":  "#1f77b4",
 }
 
 # Eski/alternatif etiketleri 5'li skalaya normalize et
@@ -225,10 +226,10 @@ _TIER_ALIASES = {
     "orta":       "Orta",
     "dusuk":      "Düşük",
     "düşük":      "Düşük",
-    "hafif":      "Düşük",       -
+    "hafif":      "Düşük",       # eski etiket → Düşük'e eşle
     "cok dusuk":  "Çok Düşük",
     "çok düşük":  "Çok Düşük",
-    "cok hafif":  "Çok Düşük",   
+    "cok hafif":  "Çok Düşük",   # eşanlamlı
     "çok hafif":  "Çok Düşük",
 }
 
@@ -253,7 +254,7 @@ def color_for_tier(tier: str, palette: dict | None = None) -> str:
     pal_merged = PALETTE_5 | PALETTE_4 | PALETTE_3
     pal = palette or pal_merged
     t = _normalize_tier(tier)
-    return pal.get(t, "#9ecae3")  # güvenli fallback
+    return pal.get(t, "#9ecae1")  # güvenli fallback
 
 def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
     """NaN/inf filtre ve güvenli tip dönüşümü."""
@@ -261,7 +262,6 @@ def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
     out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
     out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
     return out.replace([np.inf, -np.inf], np.nan).dropna()
-
 
 # ───────────────────────────── SONUÇ KARTI ─────────────────────────────
 def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
