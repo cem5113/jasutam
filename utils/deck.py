@@ -1,161 +1,219 @@
 # utils/deck.py
 from __future__ import annotations
-import pydeck as pdk
+import json
+import numpy as np
 import pandas as pd
+import pydeck as pdk
 
 try:
-    from utils.constants import KEY_COL, CRIME_TYPES
+    from utils.constants import KEY_COL
 except Exception:
     KEY_COL = "GEOID"
-    CRIME_TYPES = []
+
+# Renk paleti (risk seviyesi → RGBA)
+_COLOR = {
+    "Çok Hafif":  [198, 219, 239, 120],
+    "Hafif":      [158, 202, 225, 140],
+    "Düşük":      [107, 174, 214, 160],
+    "Orta":       [49, 130, 189, 190],
+    "Yüksek":     [239, 59, 44, 200],     # bazı modellerde 'Yüksek' olabilir
+    "Çok Yüksek": [177, 0, 38, 220],
+}
+_DEF_COLOR = [166, 206, 227, 140]
+
+def _color_for(level: str):
+    return _COLOR.get(str(level), _DEF_COLOR)
+
+def _ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """pred_expected, risk_level (tier fallback) ve basit kantil tabanlı tier üretimi."""
+    d = df.copy()
+    # E[olay]
+    if "pred_expected" not in d.columns:
+        if "expected" in d.columns:
+            d["pred_expected"] = d["expected"].astype(float)
+        else:
+            d["pred_expected"] = 0.0
+
+    # risk seviyesi
+    if "risk_level" not in d.columns:
+        if "tier" in d.columns:
+            d["risk_level"] = d["tier"].astype(str)
+        else:
+            # Kantil tabanlı otomatik seviye (q20/40/60/80)
+            x = d["pred_expected"].to_numpy()
+            if len(x) >= 5 and np.any(np.isfinite(x)):
+                q20, q40, q60, q80 = np.quantile(x[np.isfinite(x)], [0.20, 0.40, 0.60, 0.80])
+                def to_lvl(v):
+                    if v <= q20: return "Çok Hafif"
+                    if v <= q40: return "Hafif"
+                    if v <= q60: return "Düşük"
+                    if v <= q80: return "Orta"
+                    return "Çok Yüksek"
+                d["risk_level"] = [to_lvl(float(v)) for v in d["pred_expected"].to_numpy()]
+            else:
+                d["risk_level"] = "Çok Hafif"
+
+    # Gösterim için 2 ondalık
+    d["pred_expected_fmt"] = d["pred_expected"].astype(float).round(2)
+
+    # Tooltip alan adlarını sabitle
+    if "neighborhood" not in d.columns:
+        d["neighborhood"] = ""
+
+    return d
 
 def build_map_fast_deck(
     df_agg: pd.DataFrame,
     geo_df: pd.DataFrame,
     *,
-    # Overlayler
-    show_poi: bool = False,             # (şimdilik kullanılmıyor)
-    show_transit: bool = False,         # (şimdilik kullanılmıyor)
-    patrol: dict | None = None,         # (opsiyonel, ileride çizilebilir)
-    # Hotspot ve katman görünürlüğü
-    show_hotspot: bool = True,
-    show_temp_hotspot: bool = True,
+    show_poi: bool = False,             # şimdilik kullanılmıyor
+    show_transit: bool = False,         # şimdilik kullanılmıyor
+    patrol=None,                        # opsiyonel
+    show_hotspot: bool = True,          # kalıcı hotspot
+    show_temp_hotspot: bool = True,     # geçici hotspot
     temp_hotspot_points: pd.DataFrame | None = None,
-    # Yeni: Folium ile hizalı kontroller
-    risk_layer_show: bool = True,
-    perm_hotspot_show: bool = True,
-    temp_hotspot_show: bool = True,
-    selected_type: str | None = None,   # kalıcı hotspot ağırlığı için
-    perm_hotspot_mode: str = "heat",    # "heat" | "markers"
-):
-    """
-    Pydeck hızlı harita; Folium'daki build_map_fast ile parametre olarak hizalıdır.
-    - risk_layer_show: hücre noktaları (tier renklendirmesi)
-    - perm_hotspot_show: kalıcı hotspot (ısı/marker)
-    - temp_hotspot_show: geçici hotspot (olay ısısı)
-    - selected_type varsa kalıcı hotspot ağırlığı bu sütundan alınır, yoksa 'expected'.
-    """
-    center = [37.7749, -122.4194]
-    layers = []
+    show_risk_layer: bool = True        # ← app.py'deki yeni bayrak
+) -> pdk.Deck:
 
-    # Hücre centroid’leri + renk (tier)
-    if isinstance(df_agg, pd.DataFrame) and not df_agg.empty:
-        cells = (
-            df_agg.merge(
-                geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]],
-                on=KEY_COL, how="left"
-            )
-            .dropna(subset=["centroid_lat", "centroid_lon"])
-            .copy()
+    # Boş durumda da bir deck döndür
+    if df_agg is None or df_agg.empty:
+        return pdk.Deck(
+            map_style="mapbox://styles/mapbox/light-v11",
+            initial_view_state=pdk.ViewState(latitude=37.7749, longitude=-122.4194, zoom=11.8),
+            layers=[]
         )
 
-        # Renk haritası
-        color_map = {"Yüksek": [214, 39, 40], "Orta": [255, 127, 14], "Hafif": [31, 119, 180]}
-        cells["color"] = cells["tier"].apply(lambda t: color_map.get(t, [31, 119, 180]))
+    data = _ensure_cols(df_agg)
+    data[KEY_COL] = data[KEY_COL].astype(str)
 
-        # Tooltip için kısa tip listesi
-        def _top_types(row, k=3):
-            if not CRIME_TYPES:
-                return ""
-            items = []
-            for t in CRIME_TYPES:
-                v = float(row.get(t, 0.0))
-                if v > 0:
-                    items.append((t, v))
-            items.sort(key=lambda x: x[1], reverse=True)
-            return ", ".join([f"{t}:{v:.2f}" for t, v in items[:k]])
+    # GeoJSON var mı?
+    has_geojson = False
+    if "geometry" in data.columns:
+        try:
+            feats = []
+            for _, r in data.iterrows():
+                geom = r["geometry"]
+                feats.append({
+                    "type": "Feature",
+                    "properties": {
+                        KEY_COL: r[KEY_COL],
+                        "geoid": r[KEY_COL],
+                        "neighborhood": r.get("neighborhood", ""),
+                        "pred_expected": float(r.get("pred_expected", 0.0)),
+                        "pred_expected_fmt": float(r.get("pred_expected_fmt", 0.0)),
+                        "risk_level": r.get("risk_level", ""),
+                        "_color": _color_for(r.get("risk_level", "")),
+                    },
+                    "geometry": geom if isinstance(geom, dict) else json.loads(geom)
+                })
+            data_gj = {"type": "FeatureCollection", "features": feats}
+            has_geojson = True
+        except Exception:
+            has_geojson = False
 
-        cells["top_types"] = cells.apply(_top_types, axis=1)
+    layers = []
 
-        # Risk katmanı (nokta/centroid)
-        if risk_layer_show:
-            layers.append(pdk.Layer(
-                "ScatterplotLayer",
-                data=cells,
-                get_position="[centroid_lon, centroid_lat]",
-                get_fill_color="color",
-                get_radius=60,
-                pickable=True,
-                stroked=False,
-                opacity=0.35,
-            ))
+    # --- RISK LAYER ---
+    if show_risk_layer:
+        if has_geojson:
+            layers.append(
+                pdk.Layer(
+                    "GeoJsonLayer",
+                    data=data_gj,
+                    pickable=True,
+                    stroked=True,
+                    filled=True,
+                    get_fill_color="properties._color",
+                    get_line_color=[80, 80, 80, 120],
+                    get_line_width=1,
+                    extruded=False,
+                    parameters={"depthTest": False},
+                )
+            )
+        else:
+            # Centroid üzerinden (geo_df ile birleştir)
+            centers = (
+                data.merge(
+                    geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]],
+                    on=KEY_COL, how="left"
+                )
+                .dropna(subset=["centroid_lat", "centroid_lon"])
+                .copy()
+            )
+            centers["_color"] = centers["risk_level"].apply(_color_for)
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=centers,
+                    pickable=True,
+                    get_position="[centroid_lon, centroid_lat]",
+                    get_radius=80,
+                    radius_min_pixels=2,
+                    radius_max_pixels=80,
+                    get_fill_color="_color",
+                )
+            )
 
-        # Kalıcı hotspot (ısı veya marker)
-        if show_hotspot and perm_hotspot_show:
-            weight_col = None
-            if selected_type and selected_type in cells.columns:
-                weight_col = selected_type
-            elif "expected" in cells.columns:
-                weight_col = "expected"
+    # --- TEMP HOTSPOT (geçici) ---
+    if show_temp_hotspot and isinstance(temp_hotspot_points, pd.DataFrame) and not temp_hotspot_points.empty:
+        pts = temp_hotspot_points.copy()
+        # kolonları normalize et
+        cols_lower = {c.lower(): c for c in pts.columns}
+        lat = cols_lower.get("latitude") or cols_lower.get("lat")
+        lon = cols_lower.get("longitude") or cols_lower.get("lon")
+        if lat and lon:
+            pts = pts.rename(columns={lat: "lat", lon: "lon"})
+            if "weight" not in pts.columns:
+                pts["weight"] = 1.0
+            layers.append(
+                pdk.Layer(
+                    "HeatmapLayer",
+                    data=pts,
+                    get_position="[lon, lat]",
+                    get_weight="weight",
+                    radius_pixels=40,
+                    aggregation="SUM",
+                )
+            )
 
-            if weight_col:
-                hm = cells.rename(columns={"centroid_lat": "lat", "centroid_lon": "lon"})
-                hm["weight"] = hm[weight_col].clip(lower=0)
+    # --- PERM HOTSPOT (kalıcı, üst %10 marker) ---
+    if show_hotspot:
+        metric = "pred_expected" if "pred_expected" in data.columns else None
+        if metric:
+            thr = float(np.quantile(data[metric].to_numpy(), 0.90))
+            strong = (
+                data[data[metric] >= thr]
+                .merge(geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL, how="left")
+                .dropna(subset=["centroid_lat", "centroid_lon"])
+                .copy()
+            )
+            if not strong.empty:
+                layers.append(
+                    pdk.Layer(
+                        "ScatterplotLayer",
+                        data=strong,
+                        pickable=False,
+                        get_position="[centroid_lon, centroid_lat]",
+                        get_radius=120,
+                        get_fill_color=[139, 0, 0, 200],
+                    )
+                )
 
-                if perm_hotspot_mode == "markers":
-                    # Üst %10 marker
-                    thr = float(hm["weight"].quantile(0.90)) if not hm["weight"].empty else 0.0
-                    strong = hm[hm["weight"] >= thr].copy()
-                    if not strong.empty:
-                        layers.append(pdk.Layer(
-                            "ScatterplotLayer",
-                            data=strong,
-                            get_position="[lon, lat]",
-                            get_fill_color="[139,0,0, 180]",
-                            get_radius=80,
-                            pickable=False,
-                            stroked=False,
-                            opacity=0.6,
-                        ))
-                else:
-                    # Isı haritası
-                    layers.append(pdk.Layer(
-                        "HeatmapLayer",
-                        data=hm[["lon", "lat", "weight"]],
-                        get_position="[lon, lat]",
-                        get_weight="weight",
-                        radius_pixels=60,
-                    ))
-
-    # Geçici hotspot: olay noktaları ısı
-    if show_temp_hotspot and temp_hotspot_show and isinstance(temp_hotspot_points, pd.DataFrame) and not temp_hotspot_points.empty:
-        tmp = temp_hotspot_points.copy()
-        # Kolon isimlerini normalize et
-        if "lat" not in tmp.columns and "latitude" in tmp.columns:
-            tmp = tmp.rename(columns={"latitude": "lat"})
-        if "lon" not in tmp.columns and "longitude" in tmp.columns:
-            tmp = tmp.rename(columns={"longitude": "lon"})
-        if "weight" not in tmp.columns:
-            tmp["weight"] = 1.0
-        # Geçerli kolonlar var mı?
-        if {"lon", "lat", "weight"}.issubset(tmp.columns):
-            layers.append(pdk.Layer(
-                "HeatmapLayer",
-                data=tmp[["lon", "lat", "weight"]],
-                get_position="[lon, lat]",
-                get_weight="weight",
-                radius_pixels=40,
-            ))
-
-    # (Opsiyonel) Devriye rotaları ileride burada çizilebilir
-    # if patrol and "zones" in patrol: ...
-
-    # Görünüm ve tooltip
-    view_state = pdk.ViewState(latitude=center[0], longitude=center[1], zoom=11.5)
-
-    # Tooltip: hücre katmanı tıklanınca çalışır; veri alanları scatter layer'da mevcut
+    # --- TOOLTIP ---
+    # Not: q10/q90 bilgisi eklenmiyor (istenmedi).
     tooltip = {
-        "html": f"<b>{KEY_COL}</b>: {{{KEY_COL}}}<br/>"
-                "Öncelik: {tier}<br/>"
-                "E[olay]: {expected}<br/>"
-                "<i>{top_types}</i>",
-        "style": {"backgroundColor": "rgba(255,255,255,0.9)", "color": "black"}
+        "html": (
+            f"<b>{KEY_COL}:</b> {{{KEY_COL}}}<br>"
+            "<b>Mahalle:</b> {neighborhood}<br>"
+            "<b>E[olay]:</b> {pred_expected_fmt}<br>"
+            "<b>Risk seviyesi:</b> {risk_level}"
+        ),
+        "style": {"backgroundColor": "rgba(0,0,0,0.78)", "color": "white"}
     }
 
-    deck = pdk.Deck(
+    return pdk.Deck(
         layers=layers,
-        initial_view_state=view_state,
-        map_style="mapbox://styles/mapbox/light-v9",
-        tooltip=tooltip,
+        initial_view_state=pdk.ViewState(latitude=37.7749, longitude=-122.4194, zoom=11.8),
+        map_style="mapbox://styles/mapbox/light-v11",
+        tooltip=tooltip
     )
-    return deck
