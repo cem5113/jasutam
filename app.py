@@ -5,9 +5,9 @@ import sys
 import time
 import folium
 from datetime import datetime, timedelta
-from utils.constants import SF_TZ_OFFSET  
 from typing import Optional, Tuple
-
+from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
+from services.metrics import get_latest_metrics, update_from_csv, METRICS_FILE
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -31,7 +31,6 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
-from services.metrics import get_latest_metrics, update_from_csv, find_latest_artifact, METRICS_FILE
 
 # Opsiyonel modüller
 try:
@@ -685,56 +684,65 @@ if sekme == "Operasyon":
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
-
-        from services.metrics import get_latest_metrics, update_from_csv, find_latest_artifact, METRICS_FILE
         
+        # ── Güncel Model Metrikleri (artifact → JSON → göster) ───────────────────────
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
         
-        # 1️⃣ Artifact'tan otomatik güncelle
+        # 1) Artifact'tan otomatik güncelle (CSV/ZIP'i özyinelemeli arar)
         with st.spinner("Artifact'tan metrikler çekiliyor..."):
             try:
-                hit_col_env = os.environ.get("SUTAM_HIT_COL")            
-                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP") or "stacking"
-                payload = update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
-        
-                m_dbg = get_latest_metrics()
-                if m_dbg:
-                    src = m_dbg.get("source_artifact", "(bilgi yok)")
-                    nm  = m_dbg.get("model_name", "(model adı yok)")
-                    grp = m_dbg.get("model_group", "(grup yok)")
-                    st.caption(f"✅ Artifact güncellendi → **{src}** · Model: **{nm}** · Grup: **{grp}**")
-                else:
-                    st.caption("⚠️ Artifact'tan çekildi ama latest_metrics.json okunamadı.")
+                hit_col_env = os.environ.get("SUTAM_HIT_COL")            # örn: "hit_rate@100"
+                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")       # opsiyonel (örn. "stacking")
+                update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
             except FileNotFoundError:
-                st.caption("⚠️ Artifact bulunamadı (crime_predict_data/data/artifacts altında metrics_all.csv veya metrics_all*.zip yok).")
+                st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
             except Exception as e:
                 st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
         
-        # 2️⃣ JSON'dan oku ve göster
+        # 2) JSON'dan oku ve göster
         m = get_latest_metrics()
         if m:
-            k1, k2, k3 = st.columns(3)
-            if m.get("auc") is not None:
-                k1.metric("Seçim metriği (PR/ROC/F1)", f"{m['auc']:.3f}")
-            if m.get("hit_rate_topk") is not None:
-                k2.metric("HitRate@TopK", f"{m['hit_rate_topk']*100:.1f}%")
-            if m.get("brier") is not None:
-                k3.metric("Brier Score", f"{m['brier']:.3f}")
+            # Öncelik: PR-AUC > ROC AUC/f1
+            pr_auc = m.get("pr_auc")
+            rocauc = m.get("auc")            # ROC AUC ya da f1 ile doldurulmuş olabilir
+            k_hit  = m.get("hit_rate_topk")
+            brier  = m.get("brier")
         
-            meta = []
+            cols = st.columns(3)
+            if pr_auc is not None:
+                cols[0].metric("PR-AUC", f"{pr_auc:.3f}")
+            elif rocauc is not None:
+                cols[0].metric("AUC (ROC/F1)", f"{rocauc:.3f}")
+            if k_hit is not None:
+                cols[1].metric("HitRate@TopK", f"{k_hit*100:.1f}%")
+            if brier is not None:
+                cols[2].metric("Brier Score", f"{brier:.3f}")
+        
+            # Kaynak ve seçim bilgisi
+            meta_bits = []
             if m.get("model_name"):
-                meta.append(f"Model: **{m['model_name']}**")
-            if m.get("model_group"):
-                meta.append(f"Grup: **{m['model_group']}**")
-            if m.get("source_artifact"):
-                meta.append(f"Kaynak: `{m['source_artifact']}`")
-            if meta:
-                st.caption(" · ".join(meta))
+                meta_bits.append(f"Model: **{m['model_name']}**")
+            if m.get("selection_metric") and m.get("selection_value") is not None:
+                meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']:.3f}**")
+            try:
+                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
+            except Exception:
+                rel_path = METRICS_FILE
+            meta_bits.append(f"KPI JSON: `{rel_path}`")
+            if m.get("source_path"):
+                meta_bits.append(f"Kaynak: `{m['source_path']}`")
+            if m.get("timestamp"):
+                meta_bits.append(f"TS: {m['timestamp']}")
+            st.caption(" · ".join(meta_bits))
         else:
-            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({METRICS_FILE}).")
-        
+            try:
+                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
+            except Exception:
+                rel_path = METRICS_FILE
+            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
+                
         st.subheader("Dışa aktar")
         if isinstance(a, pd.DataFrame) and not a.empty:
             csv = a.to_csv(index=False).encode("utf-8")
