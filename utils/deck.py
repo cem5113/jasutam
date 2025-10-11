@@ -12,12 +12,12 @@ except Exception:
 
 # Renk paleti (risk seviyesi → RGBA)
 _COLOR = {
-    "Çok Hafif":  [198, 219, 239, 120],
-    "Hafif":      [158, 202, 225, 140],
-    "Düşük":      [107, 174, 214, 160],
-    "Orta":       [49, 130, 189, 190],
-    "Yüksek":     [239, 59, 44, 200],     # bazı modellerde 'Yüksek' olabilir
-    "Çok Yüksek": [255, 102, 102, 210],
+    "Çok Hafif":  [120, 150, 170, 180],
+    "Hafif":      [90, 160, 200, 190],
+    "Düşük":      [60, 130, 190, 200],
+    "Orta":       [255, 170, 0, 210],
+    "Yüksek":     [255, 80, 40, 220],     # bazı modellerde 'Yüksek' olabilir
+    "Çok Yüksek": [255, 40, 80, 230],
 }
 _DEF_COLOR = [166, 206, 227, 140]
 
