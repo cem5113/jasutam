@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
+from services.metrics import get_latest_metrics
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -31,6 +32,16 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
+
+metrics = get_latest_metrics()
+if metrics:
+    col1, col2, col3 = st.columns(3)
+    if metrics.get("auc") is not None:
+        col1.metric("AUC (7g)", f"{metrics['auc']:.3f}")
+    if metrics.get("hit_rate_topk") is not None:
+        col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
+    if metrics.get("brier") is not None:
+        col3.metric("Brier Score", f"{metrics['brier']:.3f}")
 
 # Opsiyonel modüller
 try:
