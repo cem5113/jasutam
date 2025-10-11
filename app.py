@@ -411,7 +411,7 @@ if sekme == "Operasyon":
                     m,
                     key="riskmap",
                     height=540,
-                    width=1400,
+                    width=1200,
                     returned_objects=["last_object_clicked", "last_clicked"],
                 )
                 if ret:
