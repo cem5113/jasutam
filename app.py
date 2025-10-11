@@ -10,8 +10,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import glob
-from streamlit_folium import st_folium
+import os, io, glob
 from zipfile import ZipFile, BadZipFile
+from streamlit_folium import st_folium
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
