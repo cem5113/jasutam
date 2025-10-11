@@ -6,7 +6,9 @@ import time
 import folium
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
-
+from datetime import datetime, timedelta
+import os, time
+    
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -716,76 +718,97 @@ if sekme == "Operasyon":
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
 
-        # ── Güncel Model Metrikleri (artifact → JSON → göster) ─────────────────
-        sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
-        label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
-        st.subheader(label, anchor=False)
-
-        # 1) Artifact'tan tek seferlik otomatik güncelle + manuel yenile butonu
-        if "_metrics_refreshed_once" not in st.session_state:
-            st.session_state["_metrics_refreshed_once"] = False
-        
-        should_refresh = (not st.session_state["_metrics_refreshed_once"]) or btn_refresh_metrics
-        if should_refresh:
-            with st.spinner("Artifact'tan metrikler çekiliyor..."):
-                try:
-                    # örn. SUTAM_HIT_COL="hit_rate@100", SUTAM_METRICS_GROUP="stacking"
-                    hit_col_env = get_cfg("SUTAM_HIT_COL") or None
-                    prefer_grp  = get_cfg("SUTAM_METRICS_GROUP") or None
-        
-                    update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
-                    st.session_state["_metrics_refreshed_once"] = True
-                except FileNotFoundError:
-                    st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
-                except Exception as e:
-                    st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
-
-        # 2) JSON'dan oku ve göster
-        m = get_latest_metrics()
-        if m:
-            pr_auc = m.get("pr_auc")
-            rocauc = m.get("auc")            # ROC AUC ya da f1 ile doldurulmuş olabilir
-            k_hit  = m.get("hit_rate_topk")
-            brier  = m.get("brier")
-
-            cols = st.columns(3)
-            if pr_auc is not None:
-                cols[0].metric("PR-AUC", f"{pr_auc:.3f}")
-            elif rocauc is not None:
-                cols[0].metric("AUC (ROC/F1)", f"{rocauc:.3f}")
-            if k_hit is not None:
-                cols[1].metric("HitRate@TopK", f"{k_hit*100:.1f}%")
-            if brier is not None:
-                cols[2].metric("Brier Score", f"{brier:.3f}")
-
-            # Kaynak ve seçim bilgisi
-            meta_bits = []
-            if m.get("model_name"):
-                meta_bits.append(f"Model: **{m['model_name']}**")
-            if m.get("selection_metric") and m.get("selection_value") is not None:
-                try:
-                    meta_bits.append(f"Seçim: **{m['selection_metric']}={float(m['selection_value']):.3f}**")
-                except Exception:
-                    meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']}**")
+    # get_cfg daha önce tanımlı değilse küçük bir fallback ekleyelim
+    if "get_cfg" not in globals():
+        def get_cfg(key: str, default: str | None = None) -> str | None:
             try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
+                import streamlit as _st
+                if key in _st.secrets:
+                    v = str(_st.secrets[key]).strip()
+                    if v:
+                        return v
             except Exception:
-                rel_path = METRICS_FILE
-            meta_bits.append(f"KPI JSON: `{rel_path}`")
-            if m.get("source_path"):
-                meta_bits.append(f"Kaynak: `{m['source_path']}`")
-            if m.get("timestamp"):
-                meta_bits.append(f"TS: {m['timestamp']}`")
-            st.caption(" · ".join(meta_bits))
-        else:
+                pass
+            v = os.environ.get(key, "")
+            v = v.strip() if isinstance(v, str) else v
+            return v or default
+    
+    sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
+    label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
+    st.subheader(label, anchor=False)
+    
+    # 1) Artifact'tan tek seferlik otomatik güncelle + manuel yenile butonu
+    st.session_state.setdefault("_metrics_refreshed_once", False)
+    should_refresh = (not st.session_state["_metrics_refreshed_once"]) or btn_refresh_metrics
+    if should_refresh:
+        with st.spinner("Artifact'tan metrikler çekiliyor..."):
             try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
+                # örn. SUTAM_HIT_COL="hit_rate@100", SUTAM_METRICS_GROUP="stacking"
+                hit_col_env = get_cfg("SUTAM_HIT_COL") or None
+                prefer_grp  = get_cfg("SUTAM_METRICS_GROUP") or None
+    
+                # artifact-only sürümünde csv_path parametresi yok; eski sürümde olsa da opsiyoneldi.
+                update_from_csv(hit_col=hit_col_env, prefer_group=prefer_grp)
+                st.session_state["_metrics_refreshed_once"] = True
+            except FileNotFoundError:
+                st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
+            except Exception as e:
+                st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
+    
+    # 2) JSON'dan oku ve göster
+    m = get_latest_metrics()
+    if m:
+        pr_auc = m.get("pr_auc")
+        rocauc = m.get("auc")            # ROC AUC ya da f1 ile doldurulmuş olabilir
+        k_hit  = m.get("hit_rate_topk")
+        brier  = m.get("brier")
+    
+        cols = st.columns(3)
+        if pr_auc is not None:
+            cols[0].metric("PR-AUC", f"{pr_auc:.3f}")
+        elif rocauc is not None:
+            cols[0].metric("AUC (ROC/F1)", f"{rocauc:.3f}")
+        if k_hit is not None:
+            cols[1].metric("HitRate@TopK", f"{k_hit*100:.1f}%")
+        if brier is not None:
+            cols[2].metric("Brier Score", f"{brier:.3f}")
+    
+        # Kaynak ve seçim bilgisi
+        meta_bits = []
+        if m.get("model_name"):
+            meta_bits.append(f"Model: **{m['model_name']}**")
+        if m.get("selection_metric") and m.get("selection_value") is not None:
+            try:
+                sel_val = float(m["selection_value"])
+                meta_bits.append(f"Seçim: **{m['selection_metric']}={sel_val:.3f}**")
             except Exception:
-                rel_path = METRICS_FILE
-            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
-
-        st.subheader("Dışa aktar")
-        if isinstance(a, pd.DataFrame) and not a.empty:
+                meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']}**")
+    
+        # METRICS_FILE yolu güvenle gösterilsin
+        try:
+            rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
+        except Exception:
+            rel_path = METRICS_FILE
+        meta_bits.append(f"KPI JSON: `{rel_path}`")
+    
+        if m.get("source_path"):
+            meta_bits.append(f"Kaynak: `{m['source_path']}`")
+        if m.get("timestamp"):
+            meta_bits.append(f"TS: {m['timestamp']}")  # ← fazladan backtick kaldırıldı
+    
+        st.caption(" · ".join(meta_bits))
+    else:
+        try:
+            rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
+        except Exception:
+            rel_path = METRICS_FILE
+        st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
+    
+    # 3) Dışa aktar (a yoksa sessiz geç)
+    st.subheader("Dışa aktar")
+    a = st.session_state.get("agg")
+    if isinstance(a, pd.DataFrame) and not a.empty:
+        try:
             csv = a.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "CSV indir",
@@ -793,6 +816,8 @@ if sekme == "Operasyon":
                 file_name=f"risk_export_{int(time.time())}.csv",
                 mime="text/csv",
             )
+        except Exception as e:
+            st.caption(f"⚠️ Dışa aktarma sırasında hata: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
