@@ -424,8 +424,8 @@ if sekme == "Operasyon":
                         perm_hotspot_show=True,
                         temp_hotspot_show=True,
                         risk_layer_name="Tahmin (risk)",
-                        perm_hotspot_layer_name="Hotspot (geçici)",
-                        temp_hotspot_layer_name="Hotspot (kalıcı)",
+                        perm_hotspot_layer_name="Hotspot (kalıcı)",  
+                        temp_hotspot_layer_name="Hotspot (geçici)", 
                     )
                 except TypeError:
                     # Eski imza: add_layer_control yok
