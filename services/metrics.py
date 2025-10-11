@@ -1,60 +1,118 @@
 # services/metrics.py
-"""
-SUTAM - Dinamik Model Performans / KPI Servisi
------------------------------------------------
-Bu modül, modelin en son performans metriklerini (AUC, HitRate@TopK, Brier)
-dosyadan okur veya eğitim sonrası otomatik olarak kaydeder.
-Hiçbir durumda sabit (dummy) değer dönmez.
-"""
+
+from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
-
-# Metriklerin kaydedileceği JSON dosyası
-METRICS_FILE = "data/latest_metrics.json"
+from typing import Optional, Dict, Any, TypedDict
 
 
-def get_latest_metrics():
-    """
-    Modelin en güncel metriklerini döndürür.
-    Eğer metrics.json dosyası yoksa None döner (dummy yok!).
-    """
+class Metrics(TypedDict, total=False):
+    auc: float
+    hit_rate_topk: float
+    brier: float
+    timestamp: str
+
+
+# ── Yol çözümleyici: çalışma dizininden bağımsız, proje köküne göre mutlak yol ──
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # services/.. = proje kökü
+DEFAULT_METRICS_PATH = os.path.join(BASE_DIR, "data", "latest_metrics.json")
+
+# Ortam değişkeni ile override edilebilir (örn. CI/CD, Docker)
+METRICS_FILE = os.environ.get("SUTAM_METRICS_FILE", DEFAULT_METRICS_PATH)
+
+
+def _validate_metrics(d: Dict[str, Any]) -> Optional[Metrics]:
+    """JSON içeriğini doğrula ve tip/arama aralığı kontrolleri yap."""
     try:
-        if os.path.exists(METRICS_FILE):
-            with open(METRICS_FILE, "r") as f:
-                data = json.load(f)
-                return {
-                    "auc": data.get("auc"),
-                    "hit_rate_topk": data.get("hit_rate_topk"),
-                    "brier": data.get("brier"),
-                    "timestamp": data.get("timestamp"),
-                }
-        else:
-            # Dosya yoksa hiç değer dönmez (UI kutuları gizlenir)
-            print("[metrics] ⚠️ No metrics file found.")
+        auc = d.get("auc", None)
+        hit = d.get("hit_rate_topk", None)
+        brier = d.get("brier", None)
+        ts = d.get("timestamp", None)
+
+        # Zorunlu alanlar: en az bir metrik + zaman damgası
+        if ts is None:
             return None
 
-    except Exception as e:
-        print(f"[metrics] ❌ Error loading metrics: {e}")
+        # Tip dönüşümleri
+        def to_float(x):
+            return float(x) if x is not None else None
+
+        auc = to_float(auc)
+        hit = to_float(hit)
+        brier = to_float(brier)
+
+        # Aralık kontrolleri (varsa)
+        if auc is not None and not (0.0 <= auc <= 1.0):
+            return None
+        if hit is not None and not (0.0 <= hit <= 1.0):
+            return None
+        if brier is not None and not (0.0 <= brier <= 1.0):
+            # Brier teorik olarak 0..1 arası, çok uç değerleri reddet
+            return None
+
+        return Metrics(auc=auc, hit_rate_topk=hit, brier=brier, timestamp=str(ts))
+    except Exception:
         return None
 
 
-def save_latest_metrics(auc, hit_rate_topk, brier):
+def get_latest_metrics() -> Optional[Metrics]:
     """
-    Yeni metrikleri JSON dosyasına kaydeder.
-    Bu fonksiyon model eğitimi tamamlandığında çağrılır.
+    Modelin en güncel metriklerini döndürür.
+    Eğer dosya yoksa veya doğrulama başarısızsa None döner (dummy yok).
+    """
+    try:
+        if not os.path.exists(METRICS_FILE):
+            print(f"[metrics] ⚠️ No metrics file found at: {METRICS_FILE}")
+            return None
+        with open(METRICS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        validated = _validate_metrics(data or {})
+        if validated is None:
+            print(f"[metrics] ❌ Invalid metrics content in: {METRICS_FILE}")
+        return validated
+    except Exception as e:
+        print(f"[metrics] ❌ Error loading metrics from {METRICS_FILE}: {e}")
+        return None
+
+
+def save_latest_metrics(auc: float, hit_rate_topk: float, brier: float) -> None:
+    """
+    Yeni metrikleri JSON dosyasına ATOMİK olarak kaydeder.
+    (Önce temp dosyaya yazar, sonra rename ile hedefe taşır.)
+    Bu fonksiyon model eğitimi tamamlandığında çağrılmalıdır.
     """
     try:
         os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
-        data = {
-            "auc": float(auc),
-            "hit_rate_topk": float(hit_rate_topk),
-            "brier": float(brier),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        with open(METRICS_FILE, "w") as f:
-            json.dump(data, f, indent=4)
-        print(f"[metrics] ✅ Metrics saved at {data['timestamp']}")
+
+        payload: Metrics = Metrics(
+            auc=float(auc),
+            hit_rate_topk=float(hit_rate_topk),
+            brier=float(brier),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+        # Önce doğrula; geçersizse yazma
+        if _validate_metrics(payload) is None:
+            raise ValueError("Provided metrics failed validation.")
+
+        dir_name = os.path.dirname(METRICS_FILE)
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tmp:
+            json.dump(payload, tmp, ensure_ascii=False, indent=4)
+            tmp_path = tmp.name
+
+        os.replace(tmp_path, METRICS_FILE)  # atomic move (aynı dosya sistemi içinde)
+        print(f"[metrics] ✅ Metrics saved at {payload['timestamp']} → {METRICS_FILE}")
+
     except Exception as e:
-        print(f"[metrics] ❌ Error saving metrics: {e}")
+        print(f"[metrics] ❌ Error saving metrics to {METRICS_FILE}: {e}")
+
+
+__all__ = [
+    "Metrics",
+    "METRICS_FILE",
+    "get_latest_metrics",
+    "save_latest_metrics",
+]
