@@ -1,17 +1,21 @@
 # components/last_update.py
 from __future__ import annotations
+
 from datetime import datetime, date, timedelta
-from typing import Optional, Union
+from typing import Optional, Union, Callable
 import html
 import streamlit as st
 
 # ——— Opsiyonel SF zamanı yardımcıları (varsa kullan, yoksa UTC fallback) ———
 def _now_sf_fallback() -> datetime:
+    """
+    SF saatini döndürür. Eğer utils.tz.now_sf varsa onu kullanır,
+    yoksa constants.SF_TZ_OFFSET’e, o da yoksa UTC’ye düşer.
+    """
     try:
         from utils.tz import now_sf  # tercih edilen
         return now_sf()
     except Exception:
-        # constants içindeki offset’i dener, o da yoksa UTC
         try:
             from utils.constants import SF_TZ_OFFSET
             return datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
@@ -24,7 +28,7 @@ def _fmt_date(
     d: Dateish,
     show_time: bool = False,
     date_fmt: str = "%Y-%m-%d",
-    time_fmt: str = "%H:%M"
+    time_fmt: str = "%H:%M",
 ) -> str:
     """Dateish'i tek biçimde yaz. str gelirse aynen bırak (kullanıcı özel biçim istemiş olabilir)."""
     if d is None:
@@ -40,19 +44,19 @@ def _fmt_date(
 def show_last_update_badge(
     *,
     app_name: str = "SUTAM",
-    data_upto: Dateish = None,                # "YYYY-MM-DD" ya da datetime/str
-    model_version: Optional[str] = None,      # "v0.3.1" ya da "0.3.1"
-    last_train: Dateish = None,               # "YYYY-MM-DD" ya da datetime/str
-    daily_update_hour_sf: Optional[int] = 19, # her gün hedef saat (SF)
+    data_upto: Dateish = None,                 # "YYYY-MM-DD" ya da datetime/str
+    model_version: Optional[str] = None,       # "v0.3.1" ya da "0.3.1"
+    last_train: Dateish = None,                # "YYYY-MM-DD" ya da datetime/str
+    daily_update_hour_sf: Optional[int] = 19,  # her gün hedef saat (SF)
     # Görünüm seçenekleri
-    show_times: bool = False,                 # tarih yanında saat göster
-    tz_label: Optional[str] = "SF",           # "(SF)" etiketi
+    show_times: bool = False,                  # tarih yanında saat göster
+    tz_label: Optional[str] = "SF",            # "(SF)" etiketi
     date_fmt: str = "%Y-%m-%d",
     time_fmt: str = "%H:%M",
-    auto_prefix_v: bool = True,               # model_version başına "v" koy
+    auto_prefix_v: bool = True,                # model_version başına "v" koy
     # Aksiyon butonları
     show_actions: bool = True,
-    on_pipeline_click: Optional[callable] = None,  # tıklandığında çalışacak fonksiyon (opsiyonel)
+    on_pipeline_click: Optional[Callable[[], None]] = None,  # tıklandığında çalışacak fonksiyon (opsiyonel)
 ) -> None:
     """
     Başlığın altında tazelik rozeti + opsiyonel aksiyon butonları gösterir.
@@ -60,9 +64,10 @@ def show_last_update_badge(
     Ör: "SUTAM • Veri: 2025-10-05’e kadar • Model v0.3.1 • Son eğitim: 2025-10-04 (SF)
          • Günlük güncellenir: ~19:00 (SF) • Şu an (SF): 2025-10-05 18:42"
     """
-    # --- session_state sözleşmesi ---
+    # --- zaman/state hazırlığı ---
     now_sf = _now_sf_fallback()
     st.session_state.setdefault("last_reload_at_sf", _fmt_date(now_sf, True, date_fmt, time_fmt))
+
     if data_upto:
         st.session_state["data_upto_sf"] = _fmt_date(data_upto, show_time=False, date_fmt=date_fmt, time_fmt=time_fmt)
     else:
@@ -101,11 +106,15 @@ def show_last_update_badge(
     parts.append(f"<span style='color:#6b7280'>Şu an ({tz_label or ''}): {html.escape(now_txt)}</span>")
 
     # Tema-duyarlı renkler
-    base = st.get_option("theme.base") or "light"
+    try:
+        base = st.get_option("theme.base") or "light"
+    except Exception:
+        base = "light"
     bg = "#0e1117" if base == "dark" else "#f8fafc"
     fg = "#d1d5db" if base == "dark" else "#0b1220"
     border = "#2b313e" if base == "dark" else "#e5e7eb"
 
+    # Rozet
     st.markdown(
         f"""
         <div style="
@@ -125,11 +134,20 @@ def show_last_update_badge(
     # --- Aksiyonlar (opsiyonel) ---
     if show_actions:
         c1, c2, c3 = st.columns([0.20, 0.22, 0.58])
+
+        # Yeniden yükle
         with c1:
             if st.button("↻ Yeniden yükle", help="Cache temizle & veriyi yeniden oku"):
+                # Burada varsa sizin cache temizleme fonksiyonlarınızı çağırın (opsiyonel)
                 st.session_state["last_reload_at_sf"] = _fmt_date(_now_sf_fallback(), True, date_fmt, time_fmt)
-                # Burada varsa kendi cache temizleme fonksiyonlarınızı çağırın
-                st.experimental_rerun()
+                # Streamlit >= 1.30
+                try:
+                    st.rerun()
+                except AttributeError:
+                    # Eski sürüm desteği
+                    st.experimental_rerun()
+
+        # Pipeline tetikleyici
         with c2:
             if st.button("⚙️ Full pipeline", help="Tam ETL/ML hattını tetikle"):
                 if callable(on_pipeline_click):
@@ -139,7 +157,8 @@ def show_last_update_badge(
                     except Exception as e:
                         st.warning(f"Pipeline tetiklenemedi: {e}")
                 else:
-                    # Mock bilgi
                     st.info("Pipeline tetik isteği (mock).")
+
+        # Son reload bilgisi
         with c3:
-            st.caption(f"Son yeniden yükleme (SF): {st.session_state.get('last_reload_at_sf','-')}")
+            st.caption(f"Son yeniden yükleme (SF): {st.session_state.get('last_reload_at_sf', '-')}")
