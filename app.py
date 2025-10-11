@@ -5,21 +5,24 @@ import sys
 import time
 import folium
 from datetime import datetime, timedelta
-from utils.constants import SF_TZ_OFFSET  
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
-from services.metrics import get_latest_metrics
 
+# ─────────────────────────────────────────────────────────────────────────────
 # Yerel paket yolları
+# ─────────────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# ─────────────────────────────────────────────────────────────────────────────
 # Yerel modüller
+# ─────────────────────────────────────────────────────────────────────────────
+from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
 from utils.patrol import allocate_patrols
@@ -30,7 +33,6 @@ from utils.ui import (
     render_kpi_row,
     render_day_hour_heatmap as fallback_heatmap,
 )
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
 from services.metrics import get_latest_metrics, METRICS_FILE
 
@@ -343,20 +345,7 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-metrics = get_latest_metrics()
-if metrics:
-    col1, col2, col3 = st.columns(3)
-    if metrics.get("auc") is not None:
-        col1.metric("AUC (7g)", f"{metrics['auc']:.3f}")
-    if metrics.get("hit_rate_topk") is not None:
-        col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
-    if metrics.get("brier") is not None:
-        col3.metric("Brier Score", f"{metrics['brier']:.3f}")
-else:
-    # İstersen bu teşhis satırını kaldırabilirsin
-    st.caption(f"📊 KPI için ölçüm dosyası bulunamadı: {METRICS_FILE}")
-
-# Veri sonu
+# Veri sonu rozeti
 try:
     _events_df = load_events_safe()
     st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
@@ -677,20 +666,11 @@ if sekme == "Operasyon":
             ]
             st.dataframe(pd.DataFrame(rows), use_container_width=True, height=260)
 
-        st.subheader("Gün × Saat Isı Matrisi")
-        if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
-            render_day_hour_heatmap(
-                st.session_state["agg"],
-                st.session_state.get("start_iso"),
-                st.session_state.get("horizon_h"),
-            )
-        else:
-            st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
-
-        from services.metrics import get_latest_metrics
+        # ── Güncel Model Metrikleri (ARTIFACT → JSON) ─────────────────────────
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
+
         m = get_latest_metrics()
         if m:
             k1, k2, k3 = st.columns(3)
@@ -701,9 +681,8 @@ if sekme == "Operasyon":
             if m.get("brier") is not None:
                 k3.metric("Brier Score", f"{m['brier']:.3f}")
         else:
-            # İstersen bu uyarıyı kaldırabilirsin
-            st.caption("📊 KPI dosyası bulunamadı veya geçersiz (data/latest_metrics.json).")
-        
+            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({METRICS_FILE}).")
+
         st.subheader("Dışa aktar")
         if isinstance(a, pd.DataFrame) and not a.empty:
             csv = a.to_csv(index=False).encode("utf-8")
