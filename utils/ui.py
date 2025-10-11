@@ -51,11 +51,8 @@ label, .stMarkdown p, .stCaption, .stText, .stRadio, .stSelectbox, .stNumberInpu
 small, .stCaption, .st-emotion-cache-1wbqy5l { font-size: .74rem; }
 
 /* === Butonlar === */
-.stButton > button,
-.stDownloadButton > button {
-  font-size: .80rem;
-  padding: 4px 10px;
-  border-radius: 8px;
+.stButton > button, .stDownloadButton > button {
+  font-size: .80rem; padding: 4px 10px; border-radius: 8px;
 }
 
 /* === Slider & input içerikleri === */
@@ -67,13 +64,10 @@ input, textarea { font-size: .80rem !important; }
 [data-testid="stMetricLabel"] { font-size: .68rem; color:#666; }
 [data-testid="stMetric"]      { padding: .06rem 0 .02rem 0; }
 
-/* st.metric ellipsis düzeltmesi (label kesilmesin) */
+/* st.metric ellipsis düzeltmesi */
 [data-testid="stMetricLabel"] p{
-  max-width:none !important;
-  overflow:visible !important;
-  text-overflow:clip !important;
-  white-space:nowrap !important;
-  margin:0 !important;
+  max-width:none !important; overflow:visible !important; text-overflow:clip !important;
+  white-space:nowrap !important; margin:0 !important;
 }
 
 /* Risk Özeti bloğu (bir tık daha küçük) */
@@ -82,20 +76,14 @@ input, textarea { font-size: .80rem !important; }
 #risk-ozet [data-testid="stMetric"]      { padding: .04rem 0 .01rem 0; }
 
 /* === Tablo/DataFrame (başlık + gövde aynı boy) === */
-[data-testid="stDataFrame"] { font-size: .72rem; }  /* bir tık okunaklı */
-
-/* hem başlık hem gövdeyi eşitle + satır/padding’i daralt */
+[data-testid="stDataFrame"] { font-size: .72rem; }
 [data-testid="stDataFrame"] thead,
 [data-testid="stDataFrame"] th,
 [data-testid="stDataFrame"] td {
-  font-size: .72rem;
-  line-height: 1.15;
-  padding-top: 4px;
-  padding-bottom: 4px;
+  font-size: .72rem; line-height: 1.15; padding-top: 4px; padding-bottom: 4px;
 }
-
-/* tablo araç çubuğu (indir vb.) bir tık küçült */
 [data-testid="stElementToolbar"] button { transform: scale(.90); }
+
 /* === Expander başlıkları === */
 .st-expanderHeader, [data-baseweb="accordion"] { font-size: .80rem; }
 
@@ -114,9 +102,9 @@ footer { visibility: hidden; }
 /* === Title/Subtitle yardım rozeti === */
 .title-help{display:inline-flex;align-items:center;gap:6px}
 .title-help .hint{
-  display:inline-block; width:14px; height:14px; border-radius:50%;
-  background:#e5e7eb; color:#111; text-align:center; line-height:14px;
-  font-size:10px; font-weight:700; cursor:help;
+  display:inline-block;width:14px;height:14px;border-radius:50%;
+  background:#e5e7eb;color:#111;text-align:center;line-height:14px;
+  font-size:10px;font-weight:700;cursor:help;
 }
 .title-help .text{border-bottom:1px dotted #9ca3af}
 </style>
@@ -132,8 +120,7 @@ def title_with_help(level: int, text: str, help_text: str | None = None):
     else:
         text_html = f'<span class="text">{text}</span>'
         hint_html = ""
-    html = f'<{tag} class="title-help">{text_html}{hint_html}</{tag}>'
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(f'<{tag} class="title-help">{text_html}{hint_html}</{tag}>', unsafe_allow_html=True)
 
 def header_with_help(text: str, help_text: str | None = None):
     title_with_help(2, text, help_text)
@@ -141,21 +128,16 @@ def header_with_help(text: str, help_text: str | None = None):
 def subheader_with_help(text: str, help_text: str | None = None):
     title_with_help(3, text, help_text)
 
-# ───────────────────────────── KPI satırı (tooltip'li, tek tip görünüm) ─────────────────────────────
+# ───────────────────────────── KPI satırı ─────────────────────────────
 def render_kpi_row(items: list[tuple[str, str | float, str]]):
-    """
-    items = [(label, value, tooltip), ...]
-    Tooltip tarayıcı 'title' ile gösterilir.
-    """
+    """items = [(label, value, tooltip), ...]. Tooltip tarayıcı 'title' ile gösterilir."""
     cols = st.columns(len(items))
     for col, (label, value, tip) in zip(cols, items):
         col.markdown(
-            f"""
-            <div class="kpi" title="{tip}">
-              <div class="kpi-label">{label}</div>
-              <div class="kpi-value">{value}</div>
-            </div>
-            """,
+            f"""<div class="kpi" title="{tip}">
+                   <div class="kpi-label">{label}</div>
+                   <div class="kpi-value">{value}</div>
+                </div>""",
             unsafe_allow_html=True,
         )
 
@@ -189,10 +171,8 @@ def actionable_cues(top_types: list[tuple[str, float]], max_items: int = 3) -> l
 
 def confidence_label(q10: float, q90: float) -> str:
     width = q90 - q10
-    if width < 0.18:
-        return "yüksek"
-    if width < 0.30:
-        return "orta"
+    if width < 0.18: return "yüksek"
+    if width < 0.30: return "orta"
     return "düşük"
 
 def risk_window_text(start_iso: str, horizon_h: int) -> str:
@@ -215,43 +195,69 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
         return f"{t1:%H:%M}–{t2:%H:%M} (tepe ≈ {t_peak:%H:%M})"
     return f"{start:%H:%M}–{t2:%H:%M}"
 
+# ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
+PALETTE_5 = {
+    "Çok Yüksek": "#b10026",
+    "Yüksek":     "#e31a1c",
+    "Orta":       "#fc8d59",
+    "Düşük":      "#74add1",
+    "Çok Düşük":  "#a6cee3",
+}
+PALETTE_4 = {
+    "Çok Yüksek": "#b10026",
+    "Yüksek":     "#e31a1c",
+    "Orta":       "#fc8d59",
+    "Düşük":      "#1f77b4",
+}
+PALETTE_3 = {  # geriye uyumluluk
+    "Yüksek": "#d62728", "Orta": "#ff7f0e", "Düşük": "#1f77b4", "Hafif": "#1f77b4",
+}
+
+def _pick_palette_from_labels(labels: list[str]) -> dict:
+    s = set(labels)
+    if {"Çok Düşük","Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(s):  # 5 seviye
+        return PALETTE_5
+    if {"Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(s):              # 4 seviye
+        return PALETTE_4
+    return PALETTE_3
+
+def color_for_tier(tier: str, palette: dict | None = None) -> str:
+    pal = palette or PALETTE_5 | PALETTE_4 | PALETTE_3
+    return pal.get(tier, "#9ecae1")
+
+def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
+    out = df[[lat_col, lon_col]].copy()
+    out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
+    out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
+    return out.replace([np.inf, -np.inf], np.nan).dropna()
+
 # ───────────────────────────── SONUÇ KARTI ─────────────────────────────
 def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
     if df_agg is None or df_agg.empty or geoid is None:
-        st.info("Bölge seçilmedi.")
-        return
-
+        st.info("Bölge seçilmedi."); return
     row = df_agg.loc[df_agg[KEY_COL] == geoid]
     if row.empty:
-        st.info("Seçilen bölge için veri yok.")
-        return
+        st.info("Seçilen bölge için veri yok."); return
     row = row.iloc[0].to_dict()
 
-    # Near-repeat (varsa)
     nr = float(row.get("nr_boost", 0.0))
-
-    # Tür bazında λ ve P(≥1)
     type_lams = {t: float(row.get(t, 0.0)) for t in CRIME_TYPES}
     type_probs = {TR_LABEL.get(t, t): 1.0 - math.exp(-lam) for t, lam in type_lams.items()}
     probs_sorted = sorted(type_probs.items(), key=lambda x: x[1], reverse=True)
 
-    # İlk iki tür için 90% PI metni
     pi90_lines: list[str] = []
-    for name_tr, _p in probs_sorted[:2]:
+    for name_tr, _ in probs_sorted[:2]:
         t_eng = next((k for k, v in TR_LABEL.items() if v == name_tr), None)
-        if t_eng is None:
-            continue
+        if t_eng is None: continue
         lam = type_lams.get(t_eng, 0.0)
         lo, hi = pois_pi90(lam)
         pi90_lines.append(f"{name_tr}: {lam:.1f} ({lo}–{hi})")
 
-    # Güven ve zaman penceresi
     q10 = float(row.get("q10", 0.0))
     q90 = float(row.get("q90", 0.0))
     conf_txt = confidence_label(q10, q90)
     win_text = risk_window_text(start_iso, horizon_h)
 
-    # UI
     subheader_with_help("🧭 Sonuç Kartı", "Seçilen hücre için özet risk ve pratik ipuçları")
     c1, c2, c3 = st.columns([1.0, 1.2, 1.2])
 
@@ -272,11 +278,9 @@ def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon
 
     st.markdown("---")
 
-    # Top-2 öneri metni
     top2 = [name for name, _ in probs_sorted[:2]]
     st.markdown(f"**Top-2 öneri:** {', '.join(top2) if top2 else '—'}")
 
-    # Kolluğa pratik öneriler
     try:
         top_types_eng = []
         for name_tr, _ in probs_sorted[:2]:
@@ -287,7 +291,6 @@ def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon
     except Exception:
         cues = []
 
-    # Near-repeat satırı (tek yerde)
     if nr > 0:
         st.markdown(
             f"- **Near-repeat etkisi:** {nr:.2f} (0=etki yok, 1=yüksek). "
@@ -302,18 +305,7 @@ def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon
         for c in cues:
             st.write(f"- {c}")
 
-def color_for_tier(tier: str) -> str:
-    # "Hafif" yerine "Düşük" — app.py ile uyumlu
-    return {"Yüksek": "#d62728", "Orta": "#ff7f0e", "Düşük": "#1f77b4"}.get(tier, "#1f77b4")
-
-def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
-    """NaN/inf filtre ve güvenli tip dönüşümü."""
-    out = df[[lat_col, lon_col]].copy()
-    out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
-    out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
-    out = out.replace([np.inf, -np.inf], np.nan).dropna()
-    return out
-
+# ───────────────────────────── HARİTA ─────────────────────────────
 def build_map_fast(
     df_agg: pd.DataFrame,
     geo_features: list,
@@ -323,17 +315,15 @@ def build_map_fast(
     *,
     show_poi: bool = False,
     show_transit: bool = False,
-    # mevcut parametreler
     show_hotspot: bool = False,
     show_temp_hotspot: bool = False,
-    temp_hotspot_points: pd.DataFrame | None = None, # [latitude, longitude, weight]
+    temp_hotspot_points: pd.DataFrame | None = None,
     selected_type: str | None = None,
-    perm_hotspot_mode: str = "markers",              # "markers" | "heat"
+    perm_hotspot_mode: str = "markers",  # "markers" | "heat"
     show_anomaly: bool = False,
     base_metric_for_anom: str | None = None,
     temp_scores_col: str = "hotspot_score",
     anom_thr: float = 0.25,
-    # ↓ yeni parametreler (harita üzerindeki katman menüsü için)
     add_layer_control: bool = True,
     risk_layer_show: bool = True,
     perm_hotspot_show: bool = True,
@@ -343,17 +333,21 @@ def build_map_fast(
     temp_hotspot_layer_name: str = "Hotspot (geçici)",
 ) -> "folium.Map":
     m = folium.Map(location=[37.7749, -122.4194], zoom_start=12, tiles="cartodbpositron")
-
     if df_agg is None or df_agg.empty:
         return m
+
     df_agg = df_agg.copy()
     df_agg[KEY_COL] = df_agg[KEY_COL].astype(str)
 
-    # --- Hücre stilleri & popup verisi
-    color_map = {str(r[KEY_COL]): color_for_tier(str(r.get("tier", ""))) for _, r in df_agg.iterrows()}
+    # Dinamik paleti, df içindeki tier etiketlerinden seç
+    labels_present = sorted(map(str, df_agg.get("tier", pd.Series(dtype=str)).dropna().unique()))
+    palette = _pick_palette_from_labels(labels_present)
+
+    # Hücre stilleri & popup verisi
+    color_map = {str(r[KEY_COL]): color_for_tier(str(r.get("tier", "")), palette) for _, r in df_agg.iterrows()}
     data_map  = df_agg.set_index(df_agg[KEY_COL].astype(str)).to_dict(orient="index")
 
-    # --- GeoJSON FeatureCollection
+    # GeoJSON FeatureCollection
     features = []
     for feat in geo_features:
         f = json.loads(json.dumps(feat))  # derin kopya
@@ -382,23 +376,27 @@ def build_map_fast(
         features.append(f)
     fc = {"type": "FeatureCollection", "features": features}
 
-    # --- Style
+    # Style
     def style_fn(feat):
         gid_val = feat.get("properties", {}).get("id")
         gid = str(gid_val) if gid_val is not None else None
-        return {"fillColor": color_map.get(gid, "#9ecae1"), "color": "#666666", "weight": 0.3, "fillOpacity": 0.55}
+        return {"fillColor": color_map.get(gid, "#9ecae1"),
+                "color": "#666666", "weight": 0.3, "fillOpacity": 0.55}
 
-    # --- GeoJson layer
+    # GeoJson layer (tooltip/popup güvenli)
     tt = pp = None
     if show_popups:
         try:
             tt = folium.features.GeoJsonTooltip(
-                fields=["id", "tier", "expected"], aliases=["GEOID", "Öncelik", "E[olay]"], localize=True, sticky=False
+                fields=["id", "tier", "expected"],
+                aliases=["GEOID", "Öncelik", "E[olay]"], localize=True, sticky=False
             )
         except Exception:
             tt = None
         try:
-            pp = folium.features.GeoJsonPopup(fields=["popup_html"], labels=False, parse_html=False, max_width=280)
+            pp = folium.features.GeoJsonPopup(
+                fields=["popup_html"], labels=False, parse_html=False, max_width=280
+            )
         except Exception:
             pp = None
 
@@ -425,7 +423,7 @@ def build_map_fast(
                 lat_col = "latitude" if "latitude" in poi_df.columns else ("lat" if "lat" in poi_df.columns else None)
                 lon_col = "longitude" if "longitude" in poi_df.columns else ("lon" if "lon" in poi_df.columns else None)
                 if lat_col and lon_col:
-                    pts = _clean_latlon(poi_df, lat_col, lon_col).head(2000)  # performans sınırı
+                    pts = _clean_latlon(poi_df, lat_col, lon_col).head(2000)
                     if not pts.empty:
                         fg_poi = folium.FeatureGroup(name="POI", show=True)
                         for _, r in pts.iterrows():
@@ -477,7 +475,7 @@ def build_map_fast(
         except Exception:
             pass
 
-    # === Geçici hotspot katmanı (son T saat ısı haritası) ===
+    # === Geçici hotspot katmanı ===
     if show_temp_hotspot and temp_hotspot_points is not None and not temp_hotspot_points.empty:
         try:
             cols = {c.lower(): c for c in temp_hotspot_points.columns}
@@ -496,7 +494,7 @@ def build_map_fast(
         except Exception:
             pass
 
-    # === Kalıcı hotspot katmanı (kategoriye duyarlı) ===
+    # === Kalıcı hotspot katmanı ===
     if show_hotspot:
         try:
             metric_col = None
@@ -510,9 +508,7 @@ def build_map_fast(
                     w = centers[metric_col].clip(lower=0).to_numpy()
                     pts = centers[["centroid_lat", "centroid_lon"]].copy()
                     pts["weight"] = w
-                    layer_name = ("Hotspot (kalıcı)" if not selected_type or selected_type in ("all", None)
-                                  else f"Hotspot (kalıcı) · {selected_type}")
-                    fg_perm_heat = folium.FeatureGroup(name=layer_name, show=bool(perm_hotspot_show))
+                    fg_perm_heat = folium.FeatureGroup(name=perm_hotspot_layer_name, show=bool(perm_hotspot_show))
                     HeatMap(pts[["centroid_lat", "centroid_lon", "weight"]].values.tolist(),
                             radius=24, blur=28, max_zoom=16).add_to(fg_perm_heat)
                     fg_perm_heat.add_to(m)
@@ -522,9 +518,7 @@ def build_map_fast(
                     geo_df[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL, how="left"
                 )
                 if not strong.empty:
-                    layer_name = "Hotspot (kalıcı)" if not selected_type or selected_type in (None, "all") \
-                                 else f"Hotspot (kalıcı) · {selected_type}"
-                    fg_perm = folium.FeatureGroup(name=layer_name, show=bool(perm_hotspot_show))
+                    fg_perm = folium.FeatureGroup(name=perm_hotspot_layer_name, show=bool(perm_hotspot_show))
                     for _, r in strong.iterrows():
                         folium.CircleMarker(
                             [float(r["centroid_lat"]), float(r["centroid_lon"])],
@@ -535,7 +529,7 @@ def build_map_fast(
         except Exception:
             pass
 
-    # === Anomali: Geçici – Kalıcı farkı ===
+    # Anomali
     if show_anomaly and temp_scores_col in df_agg.columns:
         try:
             base_col = base_metric_for_anom or ("expected" if "expected" in df_agg.columns else None)
@@ -581,7 +575,7 @@ def build_map_fast(
     except Exception:
         pass
 
-    # Devriye rotaları (varsa)
+    # Devriye rotaları
     if patrol and patrol.get("zones"):
         for z in patrol["zones"]:
             try:
@@ -606,10 +600,8 @@ def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, hor
     - Aksi halde 24 saatlik varsayılan bir dağıtım üretir.
     """
     if agg is None or agg.empty:
-        st.caption("Isı matrisi için veri yok.")
-        return
+        st.caption("Isı matrisi için veri yok."); return
 
-    # 1) Hazır kolonlarla pivot
     if {"dow", "hour"}.issubset(agg.columns):
         mat = (
             agg.pivot_table(index="dow", columns="hour", values="expected", aggfunc="sum")
@@ -622,7 +614,6 @@ def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, hor
         st.caption(f"Toplam beklenen: {tot:.2f} • En yoğun hücre: {mat.index[idx[0]]} {mat.columns[idx[1]]}: {mat.values[idx]:.2f}")
         return
 
-    # 2) start/horizon ile sentez
     if start_iso is not None and horizon_h is not None:
         start = pd.to_datetime(start_iso)
         hours = np.arange(int(horizon_h))
@@ -641,7 +632,7 @@ def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, hor
         st.caption(f"Toplam beklenen: {total_expected:.2f} • En yoğun: {mat.index[idx[0]]} {mat.columns[idx[1]]}")
         return
 
-    # 3) Fallback: 24 saat varsayılan
+    # Fallback: 24 saat varsayılan
     start = pd.Timestamp.utcnow()
     hours = np.arange(24)
     diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
