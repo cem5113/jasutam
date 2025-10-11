@@ -34,10 +34,6 @@ from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRA
 from components.last_update import show_last_update_badge
 from services.metrics import get_latest_metrics, METRICS_FILE
 
-else:
-    # Teşhis amaçlı; istersen bu uyarıyı silebilirsin
-    st.caption("📊 KPI için ölçüm dosyası bulunamadı: " + METRICS_FILE)
-
 # Opsiyonel modüller
 try:
     from components.report_view import render_reports  # type: ignore
