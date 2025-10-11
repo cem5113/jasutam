@@ -407,8 +407,11 @@ if sekme == "Operasyon":
                 ).add_to(m)
                 
                 ret = st_folium(
-                    m, key="riskmap", height=540,
-                    returned_objects=["last_object_clicked", "last_clicked"]
+                    m,
+                    key="riskmap",
+                    height=540,
+                    width=800,            
+                    returned_objects=["last_object_clicked", "last_clicked"],
                 )
                 if ret:
                     gid, _ = resolve_clicked_gid(GEO_DF, ret)
