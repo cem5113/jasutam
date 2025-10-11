@@ -447,6 +447,7 @@ if sekme == "Operasyon":
                         map_style=("mapbox://styles/mapbox/dark-v11" if st.session_state.get("dark_mode")
                                    else "mapbox://styles/mapbox/light-v11"),
                         initial_view={"lat": 37.7749, "lon": -122.4194, "zoom": 11.8},
+                    )
                     st.pydeck_chart(deck)
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
