@@ -680,115 +680,122 @@ if sekme == "Operasyon":
         st.subheader(label, anchor=False)
 
         # ───────────────────────────────────────────────────────────────
-        # Artifact arayıcı + okuma
+        # Artifact arayıcı: ZIP varsa ZIP'ten, yoksa klasörden metrics_*.csv ara
         ARTIFACT_NAME = "sf-crime-pipeline-output"
-        ARTIFACT_BASENAME = f"{ARTIFACT_NAME}.zip"
+        ARTIFACT_ZIP  = f"{ARTIFACT_NAME}.zip"
         
-        def _find_artifact_zip() -> str | None:
-            # Olası kökler (öncelik sırası)
+        def _collect_metric_frames() -> list[pd.DataFrame]:
+            frames: list[pd.DataFrame] = []
+        
+            # 1) ZIP arama (bulursak içinden oku)
+            zip_candidates = [
+                os.path.join(PROJECT_ROOT, ARTIFACT_ZIP),
+                os.path.join(PROJECT_ROOT, "artifacts", ARTIFACT_ZIP),
+                os.path.join(PROJECT_ROOT, "data", ARTIFACT_ZIP),
+                os.path.join(PROJECT_ROOT, "data", "artifacts", ARTIFACT_ZIP),
+                f"/mount/src/{ARTIFACT_ZIP}",
+                f"/mount/src/jasutam/{ARTIFACT_ZIP}",
+            ]
+            for zp in zip_candidates:
+                if os.path.isfile(zp):
+                    try:
+                        with ZipFile(zp, "r") as zf:
+                            names = [n for n in zf.namelist()
+                                     if n.lower().endswith(".csv") and "metrics_" in n.lower()]
+                            for name in names:
+                                try:
+                                    data = zf.read(name)
+                                    df = pd.read_csv(io.BytesIO(data))
+                                    if not df.empty:
+                                        df = df.copy()
+                                        df["source_path"] = f"{os.path.basename(zp)}::{name}"
+                                        frames.append(df)
+                                except Exception:
+                                    continue
+                        # ZIP bulunduysa klasör aramasına geçmeden dön
+                        if frames:
+                            return frames
+                    except BadZipFile:
+                        pass
+        
+            # 2) Klasör arama: yaygın yerlerde metrics_*.csv ara
             roots = [
-                os.getcwd(),
-                PROJECT_ROOT,                         # /mount/src/jasutam (Streamlit Cloud)
-                os.path.dirname(PROJECT_ROOT),        # /mount/src
+                PROJECT_ROOT,
                 os.path.join(PROJECT_ROOT, "data"),
                 os.path.join(PROJECT_ROOT, "artifacts"),
                 os.path.join(PROJECT_ROOT, "data", "artifacts"),
-                "/mount/src", "/app", "/home/adminuser", "/tmp", "/workspace",
+                os.path.join(PROJECT_ROOT, ARTIFACT_NAME),
+                os.path.join(PROJECT_ROOT, "data", ARTIFACT_NAME),
+                os.path.join(PROJECT_ROOT, "data", "artifacts", ARTIFACT_NAME),
             ]
-            # Doğrudan bilinen tam yol denemeleri
-            candidates = [
-                os.path.join(PROJECT_ROOT, ARTIFACT_BASENAME),
-                os.path.join(PROJECT_ROOT, "artifacts", ARTIFACT_BASENAME),
-                os.path.join(PROJECT_ROOT, "data", "artifacts", ARTIFACT_BASENAME),
-                f"/mount/src/{ARTIFACT_BASENAME}",
-                f"/mount/src/jasutam/{ARTIFACT_BASENAME}",
-                f"/app/{ARTIFACT_BASENAME}",
-            ]
-            # Köklerde glob ara
+            patterns = []
             for r in roots:
-                candidates.append(os.path.join(r, ARTIFACT_BASENAME))
-                candidates.extend(glob.glob(os.path.join(r, "**", ARTIFACT_BASENAME), recursive=True))
+                patterns.append(os.path.join(r, "metrics_*.csv"))
+                patterns.append(os.path.join(r, "**", "metrics_*.csv"))
         
-            for p in candidates:
-                if p and os.path.isfile(p):
-                    return p
-            return None
+            found_files = set()
+            for pat in patterns:
+                for p in glob.glob(pat, recursive=True):
+                    if os.path.isfile(p):
+                        found_files.add(p)
         
-        def _read_best_metrics_from_zip(zip_path: str) -> dict:
-            tables = []
-            with ZipFile(zip_path, "r") as zf:
-                names = [n for n in zf.namelist() if n.lower().endswith(".csv") and "metrics_" in n.lower()]
-                for name in names:
-                    try:
-                        data = zf.read(name)
-                        df = pd.read_csv(io.BytesIO(data))
-                        if not df.empty:
-                            df = df.copy()
-                            df["source_path"] = f"{ARTIFACT_BASENAME}::{name}"
-                            tables.append(df)
-                    except Exception:
-                        continue
-            if not tables:
-                return {}
-            cand = pd.concat(tables, ignore_index=True, sort=False)
+            for p in sorted(found_files):
+                try:
+                    df = pd.read_csv(p)
+                    if not df.empty:
+                        df = df.copy()
+                        df["source_path"] = p
+                        frames.append(df)
+                except Exception:
+                    continue
         
-            def best(col, asc=False):
-                return (
-                    cand.sort_values(col, ascending=asc, kind="mergesort").iloc[0]
-                    if col in cand.columns and cand[col].notna().any()
-                    else None
-                )
-        
-            row = (
-                best("hit_rate_topk", False)
-                or best("pr_auc", False)
-                or best("auc", False)
-                or best("brier", True)
-                or cand.iloc[0]
-            )
-            m = {}
-            for col in ["model_name", "group", "pr_auc", "auc", "brier", "hit_rate_topk", "timestamp", "source_path"]:
-                if col in row.index:
-                    val = row[col]
-                    if isinstance(val, float) and pd.isna(val):
-                        val = None
-                    m[col] = val
-            if "hit_rate_topk" in row.index and pd.notna(row["hit_rate_topk"]):
-                m["selection_metric"] = "hit_rate_topk"; m["selection_value"] = float(row["hit_rate_topk"])
-            elif "pr_auc" in row.index and pd.notna(row["pr_auc"]):
-                m["selection_metric"] = "pr_auc"; m["selection_value"] = float(row["pr_auc"])
-            elif "auc" in row.index and pd.notna(row["auc"]):
-                m["selection_metric"] = "auc"; m["selection_value"] = float(row["auc"])
-            elif "brier" in row.index and pd.notna(row["brier"]):
-                m["selection_metric"] = "brier"; m["selection_value"] = float(row["brier"])
-            return m
+            return frames
         # ───────────────────────────────────────────────────────────────
         
-        with st.spinner("Artifact aranıyor ve metrikler okunuyor..."):
+        with st.spinner("Artifact metrikleri aranıyor..."):
             try:
-                zip_path = _find_artifact_zip()
-                if not zip_path:
-                    # Teşhis: bazı dizinleri göster
-                    probe_dirs = [PROJECT_ROOT, os.getcwd(), "/mount/src", "/app"]
-                    listings = []
-                    for d in probe_dirs:
-                        try:
-                            items = ", ".join(sorted(os.listdir(d))[:10])
-                            listings.append(f"{d}: {items}")
-                        except Exception:
-                            pass
-                    st.caption("🔎 ZIP bulunamadı. Bakılan yerler:\n" + "\n".join(listings))
+                tables = _collect_metric_frames()
+                if not tables:
+                    st.caption("🔎 metrics_*.csv bulunamadı. Kontrol edilen kökler: "
+                               "`PROJECT_ROOT`, `data/`, `artifacts/`, `data/artifacts/`, "
+                               f"`{ARTIFACT_NAME}/` vb.")
                     m = {}
                 else:
-                    m = _read_best_metrics_from_zip(zip_path)
-                    if not m:
-                        st.caption(f"📂 ZIP bulundu ama metrics_*.csv yok: {zip_path}")
-            except BadZipFile as e:
-                m = {}
-                st.caption(f"⚠️ Artifact bozuk ZIP: {e}")
-            except FileNotFoundError as e:
-                m = {}
-                st.caption(f"⚠️ Artifact bulunamadı: {e}")
+                    cand = pd.concat(tables, ignore_index=True, sort=False)
+        
+                    def best(col, asc=False):
+                        return (
+                            cand.sort_values(col, ascending=asc, kind="mergesort").iloc[0]
+                            if col in cand.columns and cand[col].notna().any()
+                            else None
+                        )
+        
+                    # Öncelik: HitRate@TopK > PR-AUC > AUC > (düşük) Brier
+                    row = (
+                        best("hit_rate_topk", False)
+                        or best("pr_auc", False)
+                        or best("auc", False)
+                        or best("brier", True)
+                        or cand.iloc[0]
+                    )
+        
+                    m = {}
+                    for col in ["model_name", "group", "pr_auc", "auc", "brier",
+                                "hit_rate_topk", "timestamp", "source_path"]:
+                        if col in row.index:
+                            val = row[col]
+                            if isinstance(val, float) and pd.isna(val):
+                                val = None
+                            m[col] = val
+        
+                    if "hit_rate_topk" in row.index and pd.notna(row["hit_rate_topk"]):
+                        m["selection_metric"] = "hit_rate_topk"; m["selection_value"] = float(row["hit_rate_topk"])
+                    elif "pr_auc" in row.index and pd.notna(row["pr_auc"]):
+                        m["selection_metric"] = "pr_auc";       m["selection_value"] = float(row["pr_auc"])
+                    elif "auc" in row.index and pd.notna(row["auc"]):
+                        m["selection_metric"] = "auc";          m["selection_value"] = float(row["auc"])
+                    elif "brier" in row.index and pd.notna(row["brier"]):
+                        m["selection_metric"] = "brier";        m["selection_value"] = float(row["brier"])
             except Exception as e:
                 m = {}
                 st.caption(f"⚠️ Artifact okuma hatası: {e}")
@@ -809,7 +816,8 @@ if sekme == "Operasyon":
             if m.get("timestamp"): meta_bits.append(f"TS: {m['timestamp']}")
             st.caption(" · ".join(meta_bits))
         else:
-            st.caption(f"📊 Artifact içinde metrics_*.csv bulunamadı.")
+            st.caption("📊 Artifact içinde metrics_*.csv bulunamadı.")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
