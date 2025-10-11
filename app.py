@@ -197,7 +197,19 @@ if sekme == "Operasyon":
                 nr_decay_h=12.0,
                 filters=filters,
             )
-
+            
+            # === 5 kademeli tier ataması (Çok Yüksek, Orta, Düşük, Hafif, Çok Hafif) ===
+            try:
+                if isinstance(agg, pd.DataFrame) and "expected" in agg.columns:
+                    q20, q40, q60, q80 = np.quantile(agg["expected"].to_numpy(), [0.20, 0.40, 0.60, 0.80])
+                    bins   = [-np.inf, q20, q40, q60, q80, np.inf]
+                    labels = ["Çok Hafif", "Hafif", "Düşük", "Orta", "Çok Yüksek"]
+                    agg = agg.copy()
+                    agg["tier"] = pd.cut(agg["expected"], bins=bins, labels=labels, include_lowest=True).astype(str)
+            except Exception:
+                # Bir sorun olursa mevcut 'tier' olduğu gibi kalsın
+                pass
+            
             st.session_state.update({
                 "agg": agg,
                 "patrol": None,
@@ -343,16 +355,20 @@ if sekme == "Operasyon":
         if st.session_state["agg"] is not None:
             a = st.session_state["agg"]
             kpi_expected = round(float(a["expected"].sum()), 2)
-            high = int((a["tier"] == "Yüksek").sum())
-            mid  = int((a["tier"] == "Orta").sum())
-            # "Düşük" veya "Hafif" gelebilir → birleşik say
-            low  = int(((a["tier"] == "Düşük") | (a["tier"] == "Hafif")).sum())
-
+        
+            cnt_cok_yuksek = int((a["tier"] == "Çok Yüksek").sum())
+            cnt_orta       = int((a["tier"] == "Orta").sum())
+            cnt_dusuk      = int((a["tier"] == "Düşük").sum())
+            cnt_hafif      = int((a["tier"] == "Hafif").sum())
+            cnt_cok_hafif  = int((a["tier"] == "Çok Hafif").sum())
+        
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
-                ("Yüksek",               high,         "Yüksek öncelikli hücre sayısı"),
-                ("Orta",                 mid,          "Orta öncelikli hücre sayısı"),
-                ("Düşük",                low,          "Düşük/Hafif öncelikli hücre sayısı"),
+                ("Çok Yüksek",          cnt_cok_yuksek, "En yüksek riskli hücre sayısı (üst %20)"),
+                ("Orta",                cnt_orta,       "Orta kademe riskli hücre sayısı"),
+                ("Düşük",               cnt_dusuk,      "Düşük kademe riskli hücre sayısı"),
+                ("Hafif",               cnt_hafif,      "Hafif kademe riskli hücre sayısı"),
+                ("Çok Hafif",           cnt_cok_hafif,  "En düşük riskli hücre sayısı (alt %20)"),
             ])
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
