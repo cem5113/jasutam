@@ -30,7 +30,7 @@ __all__ = [
     "subheader_with_help",
 ]
 
-# ────────────────────────────── KÜÇÜK VE TUTARLI TİPOGRAFİ ──────────────────────────────
+# ────────────────────────────── KÜÇÜK VE TUTARLI TİPOGRAFİ + LEAFLET DÜZELTMESİ ──────────────────────────────
 SMALL_UI_CSS = """
 <style>
 /* === GENEL: tüm yazılar küçük, satır aralığı dar === */
@@ -107,6 +107,10 @@ footer { visibility: hidden; }
   font-size:10px;font-weight:700;cursor:help;
 }
 .title-help .text{border-bottom:1px dotted #9ca3af}
+
+/* === Leaflet kontrol/atıf görünürlük düzeltmesi === */
+.leaflet-control-container{display:block!important}
+.leaflet-control-attribution{display:block!important;opacity:.95}
 </style>
 """
 
@@ -196,13 +200,12 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
     return f"{start:%H:%M}–{t2:%H:%M}"
 
 # ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
-# ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
 PALETTE_5 = {
-    "Çok Yüksek": "#b10026",  # koyu kırmızı
-    "Yüksek":     "#e31a1c",  # kırmızı
-    "Orta":       "#fc8d59",  # turuncu
-    "Düşük":      "#74add1",  # mavi
-    "Çok Düşük":  "#a6cee3",  # açık mavi
+    "Çok Yüksek": "#b10026",
+    "Yüksek":     "#e31a1c",
+    "Orta":       "#fc8d59",
+    "Düşük":      "#74add1",
+    "Çok Düşük":  "#a6cee3",
 }
 PALETTE_4 = {
     "Çok Yüksek": "#b10026",
@@ -217,7 +220,6 @@ PALETTE_3 = {  # geriye uyumluluk (eski 3'lü/4'lüler)
     "Hafif":  "#1f77b4",
 }
 
-# Eski/alternatif etiketleri 5'li skalaya normalize et
 _TIER_ALIASES = {
     "cok yuksek": "Çok Yüksek",
     "çok yüksek": "Çok Yüksek",
@@ -226,10 +228,10 @@ _TIER_ALIASES = {
     "orta":       "Orta",
     "dusuk":      "Düşük",
     "düşük":      "Düşük",
-    "hafif":      "Düşük",       # eski etiket → Düşük'e eşle
+    "hafif":      "Düşük",
     "cok dusuk":  "Çok Düşük",
     "çok düşük":  "Çok Düşük",
-    "cok hafif":  "Çok Düşük",   # eşanlamlı
+    "cok hafif":  "Çok Düşük",
     "çok hafif":  "Çok Düşük",
 }
 
@@ -243,9 +245,9 @@ def _normalize_tier(t: str | None) -> str | None:
 def _pick_palette_from_labels(labels: list[str]) -> dict:
     """DataFrame'den gelen etiketlere göre uygun paleti seç (5→4→3)."""
     norm = {_normalize_tier(x) for x in labels if x is not None}
-    if {"Çok Düşük","Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):  # 5 seviye
+    if {"Çok Düşük","Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):
         return PALETTE_5
-    if {"Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):              # 4 seviye
+    if {"Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):
         return PALETTE_4
     return PALETTE_3
 
@@ -254,7 +256,7 @@ def color_for_tier(tier: str, palette: dict | None = None) -> str:
     pal_merged = PALETTE_5 | PALETTE_4 | PALETTE_3
     pal = palette or pal_merged
     t = _normalize_tier(tier)
-    return pal.get(t, "#9ecae1")  # güvenli fallback
+    return pal.get(t, "#9ecae1")
 
 def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
     """NaN/inf filtre ve güvenli tip dönüşümü."""
@@ -364,7 +366,16 @@ def build_map_fast(
     perm_hotspot_layer_name: str = "Hotspot (kalıcı)",
     temp_hotspot_layer_name: str = "Hotspot (geçici)",
 ) -> "folium.Map":
-    m = folium.Map(location=[37.7749, -122.4194], zoom_start=12, tiles="cartodbpositron")
+    # Base map: custom TileLayer to keep attribution visible
+    m = folium.Map(location=[37.7749, -122.4194], zoom_start=12, tiles=None)
+    folium.TileLayer(
+        tiles="CartoDB positron",
+        name="cartodbpositron",
+        control=True,
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+             'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+    ).add_to(m)
+
     if df_agg is None or df_agg.empty:
         return m
 
@@ -473,39 +484,43 @@ def build_map_fast(
             bus_df = _read_first_existing_csv(
                 ["data/sf_bus_stops_with_geoid.csv", "data/sf_bus_stops.csv", "data/transit_bus_stops.csv"]
             )
+        except Exception:
+            bus_df = None
+        try:
             train_df = _read_first_existing_csv(
                 ["data/sf_train_stops_with_geoid.csv", "data/sf_train_stops.csv", "data/transit_train_stops.csv"]
             )
-            fg_tr = folium.FeatureGroup(name="Transit", show=True)
-
-            if bus_df is not None and not bus_df.empty:
-                blat = "latitude" if "latitude" in bus_df.columns else ("lat" if "lat" in bus_df.columns else None)
-                blon = "longitude" if "longitude" in bus_df.columns else ("lon" if "lon" in bus_df.columns else None)
-                if blat and blon:
-                    pts = _clean_latlon(bus_df, blat, blon).head(2000)
-                    for _, r in pts.iterrows():
-                        folium.CircleMarker(
-                            location=[float(r[blat]), float(r[blon])],
-                            radius=1.6, color="#10b981", fill=True, fill_color="#10b981",
-                            fill_opacity=0.55, opacity=0.6,
-                        ).add_to(fg_tr)
-
-            if train_df is not None and not train_df.empty:
-                tlat = "latitude" if "latitude" in train_df.columns else ("lat" if "lat" in train_df.columns else None)
-                tlon = "longitude" if "longitude" in train_df.columns else ("lon" if "lon" in train_df.columns else None)
-                if tlat and tlon:
-                    pts = _clean_latlon(train_df, tlat, tlon).head(1500)
-                    for _, r in pts.iterrows():
-                        folium.CircleMarker(
-                            location=[float(r[tlat]), float(r[tlon])],
-                            radius=2.2, color="#ef4444", fill=True, fill_color="#ef4444",
-                            fill_opacity=0.6, opacity=0.75,
-                        ).add_to(fg_tr)
-
-            if len(getattr(fg_tr, "_children", {})) > 0:
-                fg_tr.add_to(m)
         except Exception:
-            pass
+            train_df = None
+
+        fg_tr = folium.FeatureGroup(name="Transit", show=True)
+
+        if bus_df is not None and not bus_df.empty:
+            blat = "latitude" if "latitude" in bus_df.columns else ("lat" if "lat" in bus_df.columns else None)
+            blon = "longitude" if "longitude" in bus_df.columns else ("lon" if "lon" in bus_df.columns else None)
+            if blat and blon:
+                pts = _clean_latlon(bus_df, blat, blon).head(2000)
+                for _, r in pts.iterrows():
+                    folium.CircleMarker(
+                        location=[float(r[blat]), float(r[blon])],
+                        radius=1.6, color="#10b981", fill=True, fill_color="#10b981",
+                        fill_opacity=0.55, opacity=0.6,
+                    ).add_to(fg_tr)
+
+        if train_df is not None and not train_df.empty:
+            tlat = "latitude" if "latitude" in train_df.columns else ("lat" if "lat" in train_df.columns else None)
+            tlon = "longitude" if "longitude" in train_df.columns else ("lon" if "lon" in train_df.columns else None)
+            if tlat and tlon:
+                pts = _clean_latlon(train_df, tlat, tlon).head(1500)
+                for _, r in pts.iterrows():
+                    folium.CircleMarker(
+                        location=[float(r[tlat]), float(r[tlon])],
+                        radius=2.2, color="#ef4444", fill=True, fill_color="#ef4444",
+                        fill_opacity=0.6, opacity=0.75,
+                    ).add_to(fg_tr)
+
+        if len(getattr(fg_tr, "_children", {})) > 0:
+            fg_tr.add_to(m)
 
     # === Geçici hotspot katmanı ===
     if show_temp_hotspot and temp_hotspot_points is not None and not temp_hotspot_points.empty:
@@ -586,13 +601,13 @@ def build_map_fast(
         except Exception:
             pass
 
-    # Katman kontrolü
+    # Katman kontrolü (ikon halinde kapalı)
     try:
         if add_layer_control:
-            # Önceden: folium.LayerControl(collapsed=True).add_to(m)
             folium.LayerControl(
-                collapsed=False,          # ← kutucuklar açık gelsin
-                position="topright"       # ← görünür yerde olsun
+                collapsed=True,
+                position="topright",
+                autoZIndex=True
             ).add_to(m)
     except Exception:
         pass
