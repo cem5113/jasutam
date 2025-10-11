@@ -81,23 +81,23 @@ def _ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
     # Risk seviyesi
     if "risk_level" not in d.columns:
         if "tier" in d.columns:
-            d["risk_level"] = d["tier"].map(_norm_level).fillna("Çok Hafif")
+            d["risk_level"] = d["tier"].map(_norm_level).fillna("Çok Düşük")
         else:
             x = d["pred_expected"].to_numpy(dtype=float)
             finite = np.isfinite(x)
             if finite.sum() >= 5:
                 q20, q40, q60, q80 = np.quantile(x[finite], [0.20, 0.40, 0.60, 0.80])
                 def to_lvl(v: float) -> str:
-                    if v <= q20: return "Çok Hafif"
-                    if v <= q40: return "Hafif"
-                    if v <= q60: return "Düşük"
-                    if v <= q80: return "Orta"
+                    if v <= q20: return "Çok Düşük"
+                    if v <= q40: return "Düşük"
+                    if v <= q60: return "Orta"
+                    if v <= q80: return "Yüksek"
                     return "Çok Yüksek"
                 d["risk_level"] = [to_lvl(float(v)) for v in x]
             else:
-                d["risk_level"] = "Çok Hafif"
+                d["risk_level"] = "Çok Düşük"
     else:
-        d["risk_level"] = d["risk_level"].map(_norm_level).fillna("Çok Hafif")
+        d["risk_level"] = d["risk_level"].map(_norm_level).fillna("Çok Düşük")
 
     d["pred_expected_fmt"] = pd.to_numeric(d["pred_expected"], errors="coerce").fillna(0.0).round(2)
     if "neighborhood" not in d.columns:
