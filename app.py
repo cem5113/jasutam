@@ -340,9 +340,11 @@ if sekme == "Operasyon":
                         show_temp_hotspot=True, temp_hotspot_points=temp_points,
                         add_layer_control=True, risk_layer_show=True,
                         perm_hotspot_show=True, temp_hotspot_show=True,
-                        risk_layer_name="Tahmin (risk)",
-                        perm_hotspot_layer_name="Hotspot (kalıcı)",
-                        temp_hotspot_layer_name="Hotspot (geçici)",
+                        layer_control_position="topright",
+                        layer_control_collapsed=True,
+                        risk_layer_name="Tahmin Haritası",
+                        perm_hotspot_layer_name="Kalıcı Hotspot",
+                        temp_hotspot_layer_name="Geçici Hotspot",
                     )
                 except TypeError:  # eski imza için
                     m = build_map_fast(
