@@ -1,162 +1,174 @@
-# utils/hotspots.py
+# utils/ui.py (REVİZE) — sadece build_map_fast ve gerekli importlar
+
 from __future__ import annotations
-from typing import Iterable, Tuple
+from typing import Iterable, Optional
 import numpy as np
 import pandas as pd
+import folium
+from folium import FeatureGroup
+from folium.plugins import HeatMap
 
-# BallTree opsiyonel: yoksa numpy fallback
-try:
-    from sklearn.neighbors import BallTree
-    _HAS_SK = True
-except Exception:
-    BallTree = None
-    _HAS_SK = False
-
-
-def _auto_cols(df: pd.DataFrame) -> Tuple[str | None, str | None, str | None]:
-    """events DataFrame'inden (lat, lon, ts) kolon adlarını esnekçe yakala."""
+# İsteğe bağlı: küçük bir anahtar-adı çözümleyici
+def _resolve_keycol(df: pd.DataFrame, prefer: str = "geoid") -> Optional[str]:
     if df is None or df.empty:
-        return None, None, None
-    lower = {str(c).lower(): c for c in df.columns}
-    lat = lower.get("latitude") or lower.get("lat")
-    lon = lower.get("longitude") or lower.get("lon")
-    ts  = lower.get("timestamp") or lower.get("ts")
-    return lat, lon, ts
+        return None
+    cols = {c.lower(): c for c in df.columns}
+    for cand in (prefer, "id", "geoid", "GEOID".lower()):
+        if cand.lower() in cols:
+            return cols[cand.lower()]
+    # ilk string benzeri kolonu zorunlu olmadıkça dönmeyelim
+    return None
 
-
-def _hour_mask(ts: pd.Series, hours_filter: Tuple[int, int]) -> pd.Series:
-    """Saat filtresi (start,end). Gece saran aralıkları da destekler (örn. 22–4)."""
-    h1, h2 = int(hours_filter[0]) % 24, int(hours_filter[1]) % 24
-    hh = ts.dt.hour
-    if h1 == h2:
-        # tüm gün
-        return pd.Series(True, index=ts.index)
-    if h1 < h2:
-        return (hh >= h1) & (hh < h2)
-    # wrap-around: örn. 22–04
-    return (hh >= h1) | (hh < h2)
-
-
-def _haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
-    """Vektörize haversine; metre döndürür."""
-    R = 6_371_000.0
-    lat1 = np.radians(lat1); lon1 = np.radians(lon1)
-    lat2 = np.radians(lat2); lon2 = np.radians(lon2)
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = (np.sin(dlat/2.0)**2 +
-         np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2)
-    return 2.0 * R * np.arcsin(np.sqrt(a))
-
-
-def temp_hotspot_scores(
-    events: pd.DataFrame,
+def build_map_fast(
+    df_agg: pd.DataFrame,
+    geo_features: Iterable[dict],
     geo_df: pd.DataFrame,
     *,
-    lookback_h: int = 48,
-    sigma_m: int = 500,
-    half_life_h: int = 24,
-    lat_col: str | None = "latitude",
-    lon_col: str | None = "longitude",
-    ts_col: str | None = "timestamp",
-    key_col: str = "GEOID",
-    type_col: str = "type",
-    category: str | Iterable[str] | None = None,       # tek kategori veya liste
-    hours_filter: tuple[int, int] | None = None        # (start,end) [start,end)
-) -> pd.DataFrame:
+    show_popups: bool = True,
+    patrol: Optional[dict] = None,
+
+    # hotspot üretimi (kalıcı / geçici)
+    show_hotspot: bool = True,
+    perm_hotspot_mode: str = "heat",     # "heat" | "markers" (şimdilik heat)
+    show_temp_hotspot: bool = True,
+    temp_hotspot_points: Optional[pd.DataFrame] = None,
+
+    # Harita üstünde LayerControl ve görünürlükler
+    add_layer_control: bool = True,
+    risk_layer_show: bool = True,
+    perm_hotspot_show: bool = True,
+    temp_hotspot_show: bool = True,
+    risk_layer_name: str = "Tahmin (risk)",
+    perm_hotspot_layer_name: str = "Hotspot (kalıcı)",
+    temp_hotspot_layer_name: str = "Hotspot (geçici)",
+
+    # Opsiyonel ek ayarlar
+    key_col_prefer: str = "geoid",       # df_agg/geo_df içindeki anahtar adı tercihi
+) -> folium.Map:
     """
-    Son 'lookback_h' saatlik olaylardan, GEOID centroid’lerine uzaysal (σ=sigma_m, Gaussian)
-    ve zamansal (half-life) ağırlıklarla **geçici hotspot puanı** üretir.
-
-    Döndürür: [key_col, hotspot_raw, hotspot_score] (score ∈ [0,1], p99 normalizasyonu)
+    Folium haritasını katmanlarla (risk/kalıcı hotspot/geçici hotspot) kurar,
+    katmanları FeatureGroup olarak ekler ve harita *üzerine* LayerControl koyar.
     """
-    out = geo_df[[key_col]].copy()
-    out["hotspot_raw"] = 0.0
-    out["hotspot_score"] = 0.0
 
-    # Girdi kontrolleri
-    if events is None or events.empty or geo_df is None or geo_df.empty:
-        return out
-    if ("centroid_lat" not in geo_df.columns) or ("centroid_lon" not in geo_df.columns):
-        # Güvenli tarafta kal: centroid yoksa üretim yapmayalım
-        return out
+    # ── Harita (San Francisco merkezli)
+    m = folium.Map(
+        location=[37.7749, -122.4194],
+        zoom_start=12,
+        tiles="cartodbpositron",
+        control_scale=True,
+    )
 
-    # Kolon adları: otomatik bul (gelen parametreler yoksa)
-    if lat_col is None or lon_col is None or ts_col is None:
-        auto_lat, auto_lon, auto_ts = _auto_cols(events)
-        lat_col = lat_col or auto_lat
-        lon_col = lon_col or auto_lon
-        ts_col  = ts_col  or auto_ts
+    if df_agg is None or df_agg.empty or geo_df is None or geo_df.empty:
+        # Yine de boş LayerControl ekleyelim (UI tutarlılığı)
+        if add_layer_control:
+            folium.LayerControl(position="topleft", collapsed=True, autoZIndex=True).add_to(m)
+        return m
 
-    if not (lat_col and lon_col and ts_col and lat_col in events.columns and lon_col in events.columns and ts_col in events.columns):
-        return out
+    # Anahtar kolonları çöz
+    key_df = _resolve_keycol(df_agg, key_col_prefer) or "geoid"
+    key_geo = _resolve_keycol(geo_df, key_col_prefer) or "geoid"
 
-    # Kopya + temizleme
-    ev = events[[lat_col, lon_col, ts_col] + ([type_col] if type_col in events.columns else [])].copy()
-    ev[ts_col]  = pd.to_datetime(ev[ts_col], utc=True, errors="coerce")
-    ev[lat_col] = pd.to_numeric(ev[lat_col], errors="coerce")
-    ev[lon_col] = pd.to_numeric(ev[lon_col], errors="coerce")
-    ev = ev.dropna(subset=[lat_col, lon_col, ts_col])
-    if ev.empty:
-        return out
+    # ── 1) RİSK KATMANI (choropleth)
+    try:
+        # Choropleth 'key_on' için geojson içinde "properties.id" kullanacağız.
+        # load_geoid_layer içinde properties['id'] set ediliyordu; yine de garanti edelim:
+        # (Eğer id yoksa ve geoid varsa, hızlıca enjekte edelim)
+        for feat in geo_features:
+            props = feat.setdefault("properties", {})
+            if "id" not in props:
+                # geo_df ile eşleştirip doldurmak karmaşık; çoğu veri setinde zaten var.
+                # yoksa choropleth yine de çalışır ama eşleşme düşebilir.
+                pass
 
-    # Kategori filtresi (tek string veya iterable)
-    if category and str(category).lower() not in ("all", "tüm", "tum"):
-        if type_col in ev.columns:
-            if isinstance(category, (list, tuple, set, np.ndarray, pd.Series)):
-                cats = {str(x).strip().lower() for x in category}
-                ev = ev[ev[type_col].astype(str).str.lower().isin(cats)]
-            else:
-                ev = ev[ev[type_col].astype(str).str.lower() == str(category).strip().lower()]
+        # Choropleth verisi: [id, value]
+        df_risk = df_agg[[key_df, "expected"]].copy()
+        df_risk.columns = ["id", "expected"]  # choropleth için 'id' anahtar ismi
 
-    # Zaman filtresi: lookback + opsiyonel saat bandı
-    now = pd.Timestamp.utcnow()
-    ev = ev[(now - ev[ts_col]) <= pd.Timedelta(hours=int(lookback_h))]
-    if hours_filter:
-        ev = ev[_hour_mask(ev[ts_col], hours_filter)]
-    if ev.empty:
-        return out
+        risk_fg = FeatureGroup(name=risk_layer_name, show=risk_layer_show, control=True, overlay=True)
+        folium.Choropleth(
+            geo_data={"type": "FeatureCollection", "features": list(geo_features)},
+            data=df_risk,
+            columns=["id", "expected"],
+            key_on="feature.properties.id",
+            fill_opacity=0.85,
+            line_opacity=0.25,
+            legend_name=None,   # sol alt efsane istemiyorsan None bırak
+            highlight=True,
+        ).add_to(risk_fg)
 
-    # Zamansal ağırlık (half-life)
-    dt_h = (now - ev[ts_col]).dt.total_seconds() / 3600.0
-    w_t = np.power(2.0, -dt_h / float(max(half_life_h, 1e-6)))
+        # İsteğe bağlı popup/tooltip
+        if show_popups:
+            folium.GeoJson(
+                {"type": "FeatureCollection", "features": list(geo_features)},
+                name="__risk_popups__",
+                style_function=lambda x: {"fillOpacity": 0, "color": "#00000000", "weight": 0},
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["id"],
+                    aliases=["GEOID"],
+                    sticky=False,
+                    opacity=0.9,
+                ),
+            ).add_to(risk_fg)
 
-    # GEO centroid’leri
-    glat = pd.to_numeric(geo_df["centroid_lat"], errors="coerce").to_numpy()
-    glon = pd.to_numeric(geo_df["centroid_lon"], errors="coerce").to_numpy()
+        risk_fg.add_to(m)
+    except Exception:
+        # Risk katmanı çizilemezse sessizce geç (harita yine gelir)
+        pass
 
-    # Uzaysal yakınlık ve skor
-    hotspot_raw = np.zeros(len(geo_df), dtype=float)
+    # ── 2) KALICI HOTSPOT (expected → centroid heat)
+    if show_hotspot:
+        try:
+            perm_fg = FeatureGroup(name=perm_hotspot_layer_name, show=perm_hotspot_show, control=True, overlay=True)
+            # centroid koordinatlarıyla birleştir
+            needed = ["centroid_lat", "centroid_lon"]
+            if all(c in geo_df.columns for c in needed):
+                dfj = (
+                    df_agg[[key_df, "expected"]]
+                    .merge(geo_df[[key_geo, "centroid_lat", "centroid_lon"]],
+                           left_on=key_df, right_on=key_geo, how="left")
+                    .dropna(subset=["centroid_lat", "centroid_lon"])
+                )
+                if perm_hotspot_mode == "heat":
+                    pts = dfj[["centroid_lat", "centroid_lon", "expected"]].to_numpy().tolist()
+                    if len(pts) > 0:
+                        HeatMap(pts, radius=18, blur=22, max_zoom=12).add_to(perm_fg)
+                else:
+                    for _, r in dfj.iterrows():
+                        folium.CircleMarker(
+                            location=[r["centroid_lat"], r["centroid_lon"]],
+                            radius=4 + 6 * float(max(r["expected"], 0)) ** 0.5,
+                            fill=True, fill_opacity=0.7, opacity=0.0,
+                        ).add_to(perm_fg)
+            perm_fg.add_to(m)
+        except Exception:
+            pass
 
-    if _HAS_SK:
-        # BallTree (haversine)
-        R = 6_371_000.0
-        ev_rad = np.radians(ev[[lat_col, lon_col]].to_numpy())
-        geo_rad = np.radians(np.c_[glat, glon])
-        tree = BallTree(ev_rad, metric="haversine")
-        query_r = 3.0 * (float(sigma_m) / R)  # 3σ yarıçap (radyan)
+    # ── 3) GEÇİCİ HOTSPOT (son olaylardan)
+    if show_temp_hotspot:
+        try:
+            temp_fg = FeatureGroup(name=temp_hotspot_layer_name, show=temp_hotspot_show, control=True, overlay=True)
+            if isinstance(temp_hotspot_points, pd.DataFrame) and not temp_hotspot_points.empty:
+                cols = {c.lower(): c for c in temp_hotspot_points.columns}
+                latc = cols.get("latitude"); lonc = cols.get("longitude"); wc = cols.get("weight")
+                if latc and lonc:
+                    if wc is None:
+                        temp_hotspot_points = temp_hotspot_points.assign(weight=1.0)
+                        wc = "weight"
+                    pts = temp_hotspot_points[[latc, lonc, wc]].to_numpy().tolist()
+                    if len(pts) > 0:
+                        HeatMap(pts, radius=16, blur=20, max_zoom=12).add_to(temp_fg)
+            temp_fg.add_to(m)
+        except Exception:
+            pass
 
-        ind = tree.query_radius(geo_rad, r=query_r, return_distance=True)
-        for gi, (idxs, dists_rad) in enumerate(zip(*ind)):
-            if len(idxs) == 0:
-                continue
-            d_m = dists_rad * R
-            w_s = np.exp(-0.5 * (d_m / float(sigma_m)) ** 2)
-            hotspot_raw[gi] = float((w_s * w_t.iloc[idxs].to_numpy()).sum())
-    else:
-        # Fallback: numpy ile brute-force (küçük veri için yeterli)
-        ev_lat = ev[lat_col].to_numpy()
-        ev_lon = ev[lon_col].to_numpy()
-        for gi in range(len(geo_df)):
-            d_m = _haversine_m(glat[gi], glon[gi], ev_lat, ev_lon)
-            mask = d_m <= 3.0 * float(sigma_m)  # 3σ
-            if not mask.any():
-                continue
-            w_s = np.exp(-0.5 * (d_m[mask] / float(sigma_m)) ** 2)
-            hotspot_raw[gi] = float((w_s * w_t.to_numpy()[mask]).sum())
+    # (Opsiyonel) devriye çizimleri vs. burada ilgili katmana eklenebilir.
 
-    # p99 normalizasyonu
-    p99 = float(np.percentile(hotspot_raw, 99)) if hotspot_raw.max() > 0 else 1.0
-    out["hotspot_raw"] = hotspot_raw
-    out["hotspot_score"] = np.clip(hotspot_raw / (p99 + 1e-12), 0.0, 1.0)
-    return out
+    # ── LayerControl: HARİTA ÜZERİNDE küçük ikon
+    if add_layer_control:
+        folium.LayerControl(
+            position="topleft",      # zoom +/- ile aynı köşe
+            collapsed=True,          # küçük ikon — tıklayınca açılır
+            autoZIndex=True
+        ).add_to(m)
+
+    return m
