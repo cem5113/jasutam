@@ -589,7 +589,11 @@ def build_map_fast(
     # Katman kontrolü
     try:
         if add_layer_control:
-            folium.LayerControl(collapsed=True).add_to(m)
+            # Önceden: folium.LayerControl(collapsed=True).add_to(m)
+            folium.LayerControl(
+                collapsed=False,          # ← kutucuklar açık gelsin
+                position="topright"       # ← görünür yerde olsun
+            ).add_to(m)
     except Exception:
         pass
 
