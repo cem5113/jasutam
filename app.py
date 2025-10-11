@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
+from components.last_update import show_last_update_badge
 
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
@@ -136,9 +137,14 @@ except Exception:
     data_upto_val = None
 
 show_last_update_badge(
-    data_upto=data_upto_val,
-    model_version=MODEL_VERSION,
-    last_train=MODEL_LAST_TRAIN,
+    app_name="SUTAM",
+    data_upto=data_upto_val,           
+    model_version=MODEL_VERSION,        
+    last_train=MODEL_LAST_TRAIN,       
+    daily_update_hour_sf=19,
+    show_times=False,                  
+    tz_label="SF",
+    show_actions=True
 )
 
 # ── Geo katmanı
