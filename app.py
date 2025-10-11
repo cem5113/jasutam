@@ -348,10 +348,17 @@ if sekme == "Operasyon":
                 else:
                     deck = build_map_fast_deck(
                         agg, GEO_DF,
+                        show_poi=show_poi,
+                        show_transit=show_transit,
                         patrol=st.session_state.get("patrol"),
                         show_hotspot=show_hotspot,
                         show_temp_hotspot=show_temp_hotspot,
                         temp_hotspot_points=temp_points,
+                        risk_layer_show=True,
+                        perm_hotspot_show=True,
+                        temp_hotspot_show=True,
+                        selected_type=None,          # tek seçimli kategori geldiğinde buraya kolon adını ver
+                        perm_hotspot_mode="heat",    # veya "markers"
                     )
                     st.pydeck_chart(deck)
                     ret = None
