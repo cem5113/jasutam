@@ -226,18 +226,13 @@ PALETTE_3: dict[str, str] = {
     "Düşük":      "#6BAED6",  # mavi
 }
 
-# Not: Bazı modeller "Çok Hafif/Hafif" üretir.
-# Bu blokta bunları "Çok Düşük/Düşük" ile eşliyoruz (renk karşılığı hazır).
 _TIER_ALIASES: dict[str, str] = {
     # yüksek aile
     "cok yuksek": "Çok Yüksek", "çok yüksek": "Çok Yüksek",
     "yuksek":     "Yüksek",     "yüksek":     "Yüksek",
     # orta
     "orta":       "Orta",
-    # düşük aile (iki terminolojiyi tekleştir)
     "dusuk":      "Düşük",      "düşük":      "Düşük",
-    "hafif":      "Düşük",      # ≈ Düşük
-    "cok hafif":  "Çok Düşük",  "çok hafif":  "Çok Düşük",
     "cok dusuk":  "Çok Düşük",  "çok düşük":  "Çok Düşük",
 }
 
