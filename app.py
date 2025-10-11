@@ -674,230 +674,81 @@ if sekme == "Operasyon":
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
         
-        # ───────────────────────────────────────────────────────────────
-        # Artifact: otomatik indir + oku (ZIP varsa ZIP'ten, yoksa klasörden)
-        import os, io, glob, json, tempfile
-        from zipfile import ZipFile, BadZipFile
-        import requests
+        from dataio.loaders import load_sf_crime_latest
         
-        ARTIFACT_NAME = "sf-crime-pipeline-output"
-        ARTIFACT_DIR  = os.path.join(PROJECT_ROOT, "data", "artifacts")
-        ARTIFACT_ZIP  = os.path.join(ARTIFACT_DIR, f"{ARTIFACT_NAME}.zip")
+        with st.spinner("🔄 En güncel metrikler yükleniyor..."):
+            df, src = load_sf_crime_latest()
         
-        # GitHub repo bilgileri (ENV'den okunur)
-        # Ör: GITHUB_REPO="org/repo", GITHUB_TOKEN="ghp_xxx", GITHUB_RUN_ID (opsiyonel)
-        GITHUB_REPO   = os.environ.get("GITHUB_REPO", "")          # "owner/repo"
-        GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        GITHUB_RUN_ID = os.environ.get("GITHUB_RUN_ID")            # opsiyonel
+        if src == "artifact":
+            st.success("✅ Artifact'tan okundu")
+        elif src == "release":
+            st.info("📦 Release sürümünden okundu")
+        else:
+            st.warning(f"Yerel veya cache verisi kullanıldı ({src})")
         
-        def _gh_headers():
-            h = {"Accept": "application/vnd.github+json"}
-            if GITHUB_TOKEN:
-                h["Authorization"] = f"Bearer {GITHUB_TOKEN}"
-            return h
-        
-        def _ensure_artifact_local() -> str | None:
-            """
-            1) Lokal ZIP varsa onu döndür.
-            2) Yoksa GitHub Actions artifacts içinden ARTIFACT_NAME'i indir (ENV gerekir):
-               - GITHUB_REPO zorunlu
-               - TOKEN yoksa public repo ise yine çalışır (rate-limit olabilir)
-               - GITHUB_RUN_ID verilmişse o run’dan al; verilmemişse son başarılı run içinden ara
-            """
-            os.makedirs(ARTIFACT_DIR, exist_ok=True)
-            if os.path.isfile(ARTIFACT_ZIP) and os.path.getsize(ARTIFACT_ZIP) > 0:
-                return ARTIFACT_ZIP
-        
-            if not GITHUB_REPO:
-                return None  # repo bilgisi yoksa indiremeyiz
-        
-            base = "https://api.github.com"
-            try:
-                # 1) Run belirle
-                if GITHUB_RUN_ID:
-                    run_url = f"{base}/repos/{GITHUB_REPO}/actions/runs/{GITHUB_RUN_ID}/artifacts"
-                    r = requests.get(run_url, headers=_gh_headers(), timeout=20)
-                    r.raise_for_status()
-                    artifacts = r.json().get("artifacts", [])
-                else:
-                    # Son 20 run içinde ara (başarılı olanlardan)
-                    runs_url = f"{base}/repos/{GITHUB_REPO}/actions/runs?per_page=20&status=success"
-                    r = requests.get(runs_url, headers=_gh_headers(), timeout=20)
-                    r.raise_for_status()
-                    artifacts = []
-                    for run in r.json().get("workflow_runs", []):
-                        aid_url = f"{base}/repos/{GITHUB_REPO}/actions/runs/{run['id']}/artifacts"
-                        rr = requests.get(aid_url, headers=_gh_headers(), timeout=20)
-                        if rr.status_code == 200:
-                            artifacts.extend(rr.json().get("artifacts", []))
-        
-                # 2) İstenen artifact'i bul
-                target = next((a for a in artifacts if a.get("name") == ARTIFACT_NAME and not a.get("expired")), None)
-                if not target:
-                    return None
-        
-                # 3) ZIP'i indir
-                dl_url = target["archive_download_url"]
-                r = requests.get(dl_url, headers=_gh_headers(), timeout=60)
-                r.raise_for_status()
-                with open(ARTIFACT_ZIP, "wb") as f:
-                    f.write(r.content)
-                return ARTIFACT_ZIP
-            except Exception:
-                return None
-        
-        def _read_tables_from_zip(zip_path: str) -> list[pd.DataFrame]:
-            frames: list[pd.DataFrame] = []
-            with ZipFile(zip_path, "r") as zf:
-                names = [n for n in zf.namelist() if not n.endswith("/")]
-                # Daha esnek isim filtreleri: metric/eval/score + desteklenen uzantılar
-                cand = [n for n in names if any(k in n.lower() for k in ("metric", "eval", "score"))
-                        and n.lower().endswith((".csv", ".tsv", ".xlsx", ".parquet"))]
-                # Hiçbiri eşleşmezse, fallback olarak metrics_*.csv dene
-                if not cand:
-                    cand = [n for n in names if n.lower().endswith(".csv") and "metrics_" in n.lower()]
-                for name in cand:
-                    try:
-                        blob = zf.read(name)
-                        low = name.lower()
-                        if low.endswith(".csv"):
-                            df = pd.read_csv(io.BytesIO(blob))
-                        elif low.endswith(".tsv"):
-                            df = pd.read_csv(io.BytesIO(blob), sep="\t")
-                        elif low.endswith(".xlsx"):
-                            df = pd.read_excel(io.BytesIO(blob))
-                        elif low.endswith(".parquet"):
-                            df = pd.read_parquet(io.BytesIO(blob))
-                        else:
-                            continue
-                        if isinstance(df, pd.DataFrame) and not df.empty:
-                            df = df.copy()
-                            df["source_path"] = f"{os.path.basename(zip_path)}::{name}"
-                            frames.append(df)
-                    except Exception:
-                        continue
-            return frames
-        
-        def _read_tables_from_dirs() -> list[pd.DataFrame]:
-            frames: list[pd.DataFrame] = []
-            roots = [
-                PROJECT_ROOT,
-                os.path.join(PROJECT_ROOT, "data"),
-                os.path.join(PROJECT_ROOT, "artifacts"),
-                os.path.join(PROJECT_ROOT, "data", "artifacts"),
-                os.path.join(PROJECT_ROOT, ARTIFACT_NAME),
-                os.path.join(PROJECT_ROOT, "data", ARTIFACT_NAME),
-                os.path.join(PROJECT_ROOT, "data", "artifacts", ARTIFACT_NAME),
-            ]
-            files = set()
-            for r in roots:
-                for p in glob.glob(os.path.join(r, "**", "*"), recursive=True):
-                    if os.path.isfile(p) and p.lower().endswith((".csv", ".tsv", ".xlsx", ".parquet")) \
-                       and any(k in p.lower() for k in ("metric", "eval", "score")):
-                        files.add(p)
-                # fallback: metrics_*.csv
-                files |= set(glob.glob(os.path.join(r, "**", "metrics_*.csv"), recursive=True))
-        
-            for p in sorted(files):
-                try:
-                    low = p.lower()
-                    if low.endswith(".csv"):
-                        df = pd.read_csv(p)
-                    elif low.endswith(".tsv"):
-                        df = pd.read_csv(p, sep="\t")
-                    elif low.endswith(".xlsx"):
-                        df = pd.read_excel(p)
-                    elif low.endswith(".parquet"):
-                        df = pd.read_parquet(p)
-                    else:
-                        continue
-                    if isinstance(df, pd.DataFrame) and not df.empty:
-                        df = df.copy()
-                        df["source_path"] = p
-                        frames.append(df)
-                except Exception:
+        def pick_best_row(cand):
+            # Öncelik: pr_auc (yüksek) → brier (düşük) → log_loss (düşük) → roc_auc (yüksek)
+            cols = {c.lower(): c for c in cand.columns}
+            df2 = cand.copy()
+            # eksik kolon varsa default ile doldur
+            for need in ["pr_auc","brier","log_loss","roc_auc"]:
+                if need not in cols:
                     continue
-            return frames
+                # nothing—varsa zaten kullanır
+            sort_keys = []
+            if "pr_auc" in cols:   sort_keys.append((cols["pr_auc"], False))
+            if "brier" in cols:    sort_keys.append((cols["brier"], True))
+            if "log_loss" in cols: sort_keys.append((cols["log_loss"], True))
+            if "roc_auc" in cols:  sort_keys.append((cols["roc_auc"], False))
+            if not sort_keys:
+                return cand.iloc[0]
+            by = [k for k, _ in sort_keys]
+            asc = [a for _, a in sort_keys]
+            return df2.sort_values(by=by, ascending=asc, kind="mergesort").iloc[0]
         
-        def _pick_best_row(cand: pd.DataFrame) -> pd.Series:
-            def best(col, asc=False):
-                return (
-                    cand.sort_values(col, ascending=asc, kind="mergesort").iloc[0]
-                    if col in cand.columns and cand[col].notna().any()
-                    else None
-                )
-            return (best("hit_rate_topk", False)
-                    or best("pr_auc", False)
-                    or best("auc", False)
-                    or best("brier", True)
-                    or cand.iloc[0])
+        # KPI + serving model seçimi
+        if not df.empty:
+            best = pick_best_row(df)
         
-        with st.spinner("Güncel metrikler indiriliyor/okunuyor..."):
-            m = {}
-            tables: list[pd.DataFrame] = []
+            # KPI kutuları
+            pr_auc = best.get("pr_auc")
+            rocauc = best.get("roc_auc")
+            brier  = best.get("brier")
         
-            if isinstance(up, bytes):
-                pass  # no-op
-            elif up is not None:
-                try:
-                    content = up.read()
-                    name = up.name
-                    if name.lower().endswith(".zip"):
-                        tables = _read_tables_from_zip(io.BytesIO(content))  # type: ignore[arg-type]
-                    else:
-                        # tek tablo
-                        low = name.lower()
-                        if low.endswith(".csv"):
-                            df = pd.read_csv(io.BytesIO(content))
-                        elif low.endswith(".tsv"):
-                            df = pd.read_csv(io.BytesIO(content), sep="\t")
-                        elif low.endswith(".xlsx"):
-                            df = pd.read_excel(io.BytesIO(content))
-                        elif low.endswith(".parquet"):
-                            df = pd.read_parquet(io.BytesIO(content))
-                        else:
-                            df = None
-                        if isinstance(df, pd.DataFrame) and not df.empty:
-                            df = df.copy(); df["source_path"] = name; tables = [df]
-                except Exception as e:
-                    st.caption(f"⚠️ Yüklenen dosya okunamadı: {e}")
+            c1, c2, c3 = st.columns(3)
+            if pd.notna(pr_auc):
+                c1.metric("PR-AUC", f"{float(pr_auc):.3f}")
+            elif pd.notna(rocauc):
+                c1.metric("AUC (ROC)", f"{float(rocauc):.3f}")
         
-            # 1) Lokal ZIP/klasör
-            if not tables:
-                local_zip = _ensure_artifact_local()  # indirir ya da None döner
-                if local_zip and os.path.isfile(local_zip):
-                    try:
-                        tables = _read_tables_from_zip(local_zip)
-                    except Exception:
-                        tables = []
+            if pd.notna(brier):
+                c2.metric("Brier Score", f"{float(brier):.3f}")
         
-            # 2) Klasörlerden tara (çıkarılmış dosyalar)
-            if not tables:
-                tables = _read_tables_from_dirs()
+            # Hit@TopK kolonun yoksa göstermeyiz
+            if "hit_rate_topk" in best and pd.notna(best["hit_rate_topk"]):
+                c3.metric("Hit@TopK", f"{float(best['hit_rate_topk'])*100:.1f}%")
         
-            # 3) Sonuç yoksa mesaj
-            if not tables:
-                st.caption("🔎 Uy um lu dosya bulunamadı (metric/eval/score + csv/tsv/xlsx/parquet). "
-                           "GitHub erişimi için ENV ayarlayın: GITHUB_REPO, [GITHUB_TOKEN], [GITHUB_RUN_ID].")
-            else:
-                cand = pd.concat(tables, ignore_index=True, sort=False)
-                row = _pick_best_row(cand)
+            # Sunulacak model bilgisini UI/servis için kaydet
+            serving_model = str(best.get("model", "unknown"))
+            model_group   = str(best.get("group", ""))  # "base" / "stacking" vb.
         
-                # Özet sözlük
-                for col in ["model_name", "group", "pr_auc", "auc", "brier", "hit_rate_topk", "timestamp", "source_path"]:
-                    if col in row.index:
-                        val = row[col]
-                        if isinstance(val, float) and pd.isna(val):
-                            val = None
-                        m[col] = val
-                if "hit_rate_topk" in row.index and pd.notna(row["hit_rate_topk"]):
-                    m["selection_metric"] = "hit_rate_topk"; m["selection_value"] = float(row["hit_rate_topk"])
-                elif "pr_auc" in row.index and pd.notna(row["pr_auc"]):
-                    m["selection_metric"] = "pr_auc"; m["selection_value"] = float(row["pr_auc"])
-                elif "auc" in row.index and pd.notna(row["auc"]):
-                    m["selection_metric"] = "auc";  m["selection_value"] = float(row["auc"])
-                elif "brier" in row.index and pd.notna(row["brier"]):
-                    m["selection_metric"] = "brier"; m["selection_value"] = float(row["brier"])
+            st.session_state["serving_model"] = serving_model
+            st.session_state["serving_group"] = model_group
+            st.session_state["serving_metric"] = "pr_auc" if pd.notna(pr_auc) else ("roc_auc" if pd.notna(rocauc) else None)
+            st.session_state["serving_metric_value"] = float(pr_auc) if pd.notna(pr_auc) else (float(rocauc) if pd.notna(rocauc) else None)
+        
+            st.caption(
+                f"📦 Seçilen model: **{serving_model}**"
+                + (f" · grup: `{model_group}`" if model_group else "")
+                + (f" · seçim: **{st.session_state['serving_metric']}={st.session_state['serving_metric_value']:.3f}**" if st.session_state["serving_metric"] else "")
+            )
+        
+            # ⬇️ Eğer model ağırlıklarını ada göre yükleyeceksen burada kullan:
+            # örnek: models/{group}/{model}/... gibi bir düzen
+            # weights_path = f"models/{model_group}/{serving_model}/weights.pkl"
+            # load_weights(weights_path)
+        else:
+            st.info("Metrik tablosu boş görünüyor.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
