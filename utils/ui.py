@@ -125,14 +125,15 @@ footer { visibility: hidden; }
 # ───────────────────────────── Başlık + mini açıklama yardımcıları ─────────────────────────────
 def title_with_help(level: int, text: str, help_text: str | None = None):
     """level=1/2/3 → h1/h2/h3. Hover'da küçük açıklama için title attr."""
-    help_attr = f'title="{help_text}"' if help_text else ""
     tag = f"h{max(1, min(level, 3))}"
-    st.markdown(
-        f'<{tag} class="title-help"><span class="text" {help_attr}>{text}</span>'
-        f'{("<span class=\\"hint\\" "+help_attr+">i</span>") if help_text else ""}'
-        f'</{tag}>',
-        unsafe_allow_html=True,
-    )
+    if help_text:
+        text_html = f'<span class="text" title="{help_text}">{text}</span>'
+        hint_html = f'<span class="hint" title="{help_text}">i</span>'
+    else:
+        text_html = f'<span class="text">{text}</span>'
+        hint_html = ""
+    html = f'<{tag} class="title-help">{text_html}{hint_html}</{tag}>'
+    st.markdown(html, unsafe_allow_html=True)
 
 def header_with_help(text: str, help_text: str | None = None):
     title_with_help(2, text, help_text)
