@@ -354,44 +354,43 @@ if sekme == "Operasyon":
 
         if agg is not None:
             if engine == "Folium":
-                # Folium harita
-                m = build_map_fast(
-                    df_agg=agg,
-                    geo_features=GEO_FEATURES,
-                    geo_df=GEO_DF,
-                    show_popups=show_popups,
-                    patrol=st.session_state.get("patrol"),
-                    show_hotspot=perm_hotspot_show,           # kalıcı hotspot görünürlüğü
-                    perm_hotspot_mode="heat",
-                    show_temp_hotspot=temp_hotspot_show,      # geçici hotspot görünürlüğü
-                    temp_hotspot_points=temp_points,
-                
-                    # ↓ katman kontrol seçenekleri
-                    add_layer_control=True,                   # LayerControl mutlaka eklensin
-                    risk_layer_show=risk_layer_show,          # risk katmanı başta açık/kapalı
-                    perm_hotspot_show=perm_hotspot_show,      # kalıcı hotspot başta açık/kapalı
-                    temp_hotspot_show=temp_hotspot_show,      # geçici hotspot başta açık/kapalı
-                
-                    # (İsteğe bağlı, Türkçe isimler)
-                    risk_layer_name="Tahmin (risk)",
-                    perm_hotspot_layer_name="Hotspot (kalıcı)",
-                    temp_hotspot_layer_name="Hotspot (geçici)",
-                )
-
-                import folium
-                assert isinstance(m, folium.Map), f"st_folium beklediği tipte değil: {type(m)}"
-
-                ret = st_folium(
-                    m,
-                    key="riskmap",
-                    height=540,
-                    width=1600,  # genişlik
-                    returned_objects=["last_object_clicked", "last_clicked"]
-                )
-                if ret:
-                    gid, _ = resolve_clicked_gid(GEO_DF, ret)
-                    if gid:
-                        st.session_state["explain"] = {"geoid": gid}
+            # Folium harita
+            m = build_map_fast(
+                df_agg=agg,
+                geo_features=GEO_FEATURES,
+                geo_df=GEO_DF,
+                show_popups=show_popups,
+                patrol=st.session_state.get("patrol"),
+            
+                # katman üretimi:
+                show_hotspot=show_hotspot,
+                perm_hotspot_mode="heat",          # "markers" da olabilir
+                show_temp_hotspot=show_temp_hotspot,
+                temp_hotspot_points=temp_points,
+            
+                # harita içi layer control + başlangıç görünürlüğü + isimler:
+                add_layer_control=True,            # harita içinde LayerControl menüsü
+                risk_layer_show=risk_layer_show,   # sidebar’daki checkbox ile senkron
+                perm_hotspot_show=perm_hotspot_show,
+                temp_hotspot_show=temp_hotspot_show,
+                risk_layer_name=risk_layer_name,
+                perm_hotspot_layer_name=perm_hotspot_layer_name,
+                temp_hotspot_layer_name=temp_hotspot_layer_name,
+            )
+            
+            # render et ve tıklanan hücreyi yakala
+            ret = st_folium(
+                m,
+                key="riskmap",
+                height=540,
+                width=1600,  # gerekirse kaldır/azalt
+                returned_objects=["last_object_clicked", "last_clicked"],
+            )
+            
+            if ret:
+                gid, _ = resolve_clicked_gid(GEO_DF, ret)
+                if gid:
+                    st.session_state["explain"] = {"geoid": gid}
 
             else:
                 # Pydeck harita
