@@ -264,7 +264,11 @@ st.sidebar.divider()
 
 st.sidebar.header("Devriye Parametreleri")
 engine = st.sidebar.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
-
+with st.expander("Katmanlar", expanded=False):
+    show_risk_layer   = st.checkbox("Tahmin (risk)", True)
+    show_temp_hotspot = st.checkbox("Hotspot (geçici)", True)
+    show_perm_hotspot = st.checkbox("Hotspot (kalıcı)", True)
+    
 st.sidebar.subheader("Harita katmanları")
 show_poi = st.sidebar.checkbox("POI overlay", value=False)
 show_transit = st.sidebar.checkbox("Toplu taşıma overlay", value=False)
@@ -345,6 +349,15 @@ if sekme == "Operasyon":
             temp_points = make_temp_hotspot_from_agg(agg, GEO_DF, topn=80)
         st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
 
+        if isinstance(agg, pd.DataFrame):
+            if "neighborhood" not in agg.columns and "neighborhood" in GEO_DF.columns:
+                try:
+                    from utils.geo import join_neighborhood  # 2. adımda eklediğimiz yardımcı
+                    agg = join_neighborhood(agg, GEO_DF)
+                except Exception:
+                    # utils.geo.join_neighborhood yoksa sessizce geç
+                    pass
+
         # — HARİTA — (gömülü katman simgesi = sağ üst ikon)
         if agg is not None:
             if engine == "Folium":
@@ -421,7 +434,16 @@ if sekme == "Operasyon":
                 if build_map_fast_deck is None:
                     st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
                 else:
-                    deck = build_map_fast_deck(agg, GEO_DF, show_poi=show_poi, show_transit=show_transit, patrol=st.session_state.get("patrol"), show_hotspot=True, show_temp_hotspot=True, temp_hotspot_points=temp_points)
+                    deck = build_map_fast_deck(
+                        agg, GEO_DF,
+                        show_poi=show_poi,
+                        show_transit=show_transit,
+                        patrol=st.session_state.get("patrol"),
+                        show_hotspot=show_perm_hotspot,       # kalıcı hotspot
+                        show_temp_hotspot=show_temp_hotspot,  # geçici hotspot
+                        temp_hotspot_points=temp_points,
+                        show_risk_layer=show_risk_layer       # ← YENİ
+                    )
                     st.pydeck_chart(deck)
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
