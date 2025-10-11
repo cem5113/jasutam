@@ -174,13 +174,59 @@ def run_prediction(start_h: int, end_h: int, filters: dict, geo_df: pd.DataFrame
         filters=filters,
     )
     # 5 kademeli tier
-    if isinstance(agg, pd.DataFrame) and "expected" in agg.columns and not agg.empty:
-        q20, q40, q60, q80 = np.quantile(agg["expected"].to_numpy(), [0.20, 0.40, 0.60, 0.80])
-        bins = [-np.inf, q20, q40, q60, q80, np.inf]
-        labels = ["Çok Düşük","Düşük", "Orta", "Çok Yüksek"]
-        agg = agg.copy()
-        agg["tier"] = pd.cut(agg["expected"], bins=bins, labels=labels, include_lowest=True).astype(str)
+    def assign_tier_safe(agg: pd.DataFrame) -> pd.DataFrame:
+        """expected → ['Çok Düşük','Düşük','Orta','Yüksek','Çok Yüksek'] (sağlam sınıflayıcı)."""
+        if agg is None or agg.empty or "expected" not in agg.columns:
+            return agg
+        out = agg.copy()
+        x = pd.to_numeric(out["expected"], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        x = x.clip(lower=0.0)
+        out["expected"] = x
+    
+        labels5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
+    
+        # veri çeşitliliği azsa → tek seviyeye düş
+        if x.nunique(dropna=True) < 5 or x.count() < 5:
+            out["tier"] = "Çok Düşük"
+            return out
+    
+        # qcut ile dene (eşsıralarda duplicates='drop')
+        try:
+            out["tier"] = pd.qcut(x, q=5, labels=labels5, duplicates="drop").astype(str)
+            if out["tier"].isna().all():
+                raise ValueError("qcut collapsed")
+            return out
+        except Exception:
+            pass
+    
+        # elle kantil: epsilon ile kenarları ayır
+        try:
+            q = np.quantile(x.to_numpy(), [0.20, 0.40, 0.60, 0.80]).astype(float)
+            eps = max(1e-9, 1e-6 * float(np.nanmax(x) - np.nanmin(x)))
+            for i in range(1, len(q)):
+                if q[i] <= q[i-1]:
+                    q[i] = q[i-1] + eps
+            bins = np.concatenate(([-np.inf], q, [np.inf]))
+            out["tier"] = pd.cut(x, bins=bins, labels=labels5, include_lowest=True).astype(str)
+            return out
+        except Exception:
+            med = float(np.nanmedian(x)); p75 = float(np.nanquantile(x, 0.75)); p90 = float(np.nanquantile(x, 0.90))
+            def fallback(v: float) -> str:
+                if v <= med * 0.5:  return "Çok Düşük"
+                if v <= med:        return "Düşük"
+                if v <= p75:        return "Orta"
+                if v <= p90:        return "Yüksek"
+                return "Çok Yüksek"
+            out["tier"] = [fallback(float(v)) for v in x]
+            return out
+    
+    # … run_prediction içinde bu bloğu KALDIR …
+    # (eski pd.cut kodu silinecek)
+    
+    # … VE ŞU İKİ SATIRI KOY …
+    agg = assign_tier_safe(agg)
     agg = ensure_keycol(agg, KEY_COL)
+
 
     # Uzun ufuk referansı (30 gün geriden bugüne)
     try:
@@ -433,14 +479,14 @@ if sekme == "Operasyon":
                     deck = build_map_fast_deck(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        show_hotspot=True,
-                        show_temp_hotspot=show_temp_hotspot,
+                        show_hotspot=True,                    # kalıcı hotspot (üst %10)
+                        show_temp_hotspot=show_temp_hotspot,  # geçici hotspot
                         temp_hotspot_points=temp_points,
-                        show_risk_layer=True,
+                        show_risk_layer=True,                 # risk katmanı (tier paletine göre)
                         map_style=("mapbox://styles/mapbox/dark-v11" if st.session_state.get("dark_mode")
                                    else "mapbox://styles/mapbox/light-v11"),
                         initial_view={"lat": 37.7749, "lon": -122.4194, "zoom": 11.8},
-                        # override_palette={"Yüksek": [255,0,0,230]}  # istersen özel palet
+                        # override_palette={"Yüksek": [255, 0, 0, 230]},  # istersen geçici override
                     )
                     st.pydeck_chart(deck)
         else:
