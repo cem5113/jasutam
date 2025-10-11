@@ -685,28 +685,26 @@ if sekme == "Operasyon":
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
         
-        # ── Güncel Model Metrikleri (artifact → JSON → göster) ───────────────────────
+        # ── Güncel Model Metrikleri (artifact ZIP → göster) ──────────────────────────
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
         
-        # 1) Artifact'tan otomatik güncelle (CSV/ZIP'i özyinelemeli arar)
         with st.spinner("Artifact'tan metrikler çekiliyor..."):
             try:
-                hit_col_env = os.environ.get("SUTAM_HIT_COL")            # örn: "hit_rate@100"
-                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")       # opsiyonel (örn. "stacking")
-                update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
-            except FileNotFoundError:
-                st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
+                hit_col_env = os.environ.get("SUTAM_HIT_COL")            # örn: "hit_rate@100" veya "hit_rate_topk"
+                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")      # opsiyonel (örn. "stacking")
+                # ENV ile: SUTAM_ARTIFACT_ZIP veya SUTAM_ARTIFACT_DIR kullanılır
+                from services.metrics import get_latest_metrics_from_artifact, artifact_location
+                m = get_latest_metrics_from_artifact(hit_col=hit_col_env, prefer_group=prefer_grp)
+                loc = artifact_location()
             except Exception as e:
-                st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
+                m, loc = {}, "N/A"
+                st.caption(f"⚠️ Artifact okuma hatası: {e}")
         
-        # 2) JSON'dan oku ve göster
-        m = get_latest_metrics()
         if m:
-            # Öncelik: PR-AUC > ROC AUC/f1
             pr_auc = m.get("pr_auc")
-            rocauc = m.get("auc")            # ROC AUC ya da f1 ile doldurulmuş olabilir
+            rocauc = m.get("auc")
             k_hit  = m.get("hit_rate_topk")
             brier  = m.get("brier")
         
@@ -720,38 +718,20 @@ if sekme == "Operasyon":
             if brier is not None:
                 cols[2].metric("Brier Score", f"{brier:.3f}")
         
-            # Kaynak ve seçim bilgisi
             meta_bits = []
             if m.get("model_name"):
                 meta_bits.append(f"Model: **{m['model_name']}**")
             if m.get("selection_metric") and m.get("selection_value") is not None:
                 meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']:.3f}**")
-            try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
-            except Exception:
-                rel_path = METRICS_FILE
-            meta_bits.append(f"KPI JSON: `{rel_path}`")
             if m.get("source_path"):
                 meta_bits.append(f"Kaynak: `{m['source_path']}`")
             if m.get("timestamp"):
                 meta_bits.append(f"TS: {m['timestamp']}")
+            meta_bits.append(f"Artifact: `{loc}`")
             st.caption(" · ".join(meta_bits))
         else:
-            try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
-            except Exception:
-                rel_path = METRICS_FILE
-            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
-                
-        st.subheader("Dışa aktar")
-        if isinstance(a, pd.DataFrame) and not a.empty:
-            csv = a.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "CSV indir",
-                data=csv,
-                file_name=f"risk_export_{int(time.time())}.csv",
-                mime="text/csv",
-            )
+            st.caption("📊 Artifact içinde uygun metrics_* dosyası bulunamadı.")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
