@@ -675,16 +675,59 @@ if sekme == "Operasyon":
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
+
+        # Artifact CSV sabiti
+        ARTIFACT_NAME = "sf-crime-pipeline-output*"
+        ARTIFACT_CSV  = f"data/artifacts/{ARTIFACT_NAME}.csv"  
         
-        with st.spinner("Artifact'tan metrikler çekiliyor..."):
+        with st.spinner("Artifact CSV okunuyor..."):
             try:
-                hit_col_env = os.environ.get("SUTAM_HIT_COL")       # örn: "hit_rate_topk"
-                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP") # örn: "stacking"
-                m   = get_latest_metrics_from_artifact(hit_col=hit_col_env, prefer_group=prefer_grp)
-                loc = artifact_location()
+                df = pd.read_csv(ARTIFACT_CSV)
+                if df.empty:
+                    m = {}
+                else:
+                    cand = df.copy()
+        
+                    def best(col, asc=False):
+                        return (
+                            cand.sort_values(col, ascending=asc, kind="mergesort").iloc[0]
+                            if col in cand.columns and cand[col].notna().any()
+                            else None
+                        )
+        
+                    row = (
+                        best("hit_rate_topk", False)
+                        or best("pr_auc", False)
+                        or best("auc", False)
+                        or best("brier", True)
+                        or cand.iloc[0]
+                    )
+        
+                    m = {}
+                    for col in ["model_name", "group", "pr_auc", "auc", "brier", "hit_rate_topk", "timestamp"]:
+                        if col in row.index:
+                            val = row[col]
+                            if isinstance(val, float) and pd.isna(val):
+                                val = None
+                            m[col] = val
+        
+                    if "hit_rate_topk" in row.index and pd.notna(row["hit_rate_topk"]):
+                        m["selection_metric"] = "hit_rate_topk"
+                        m["selection_value"] = float(row["hit_rate_topk"])
+                    elif "pr_auc" in row.index and pd.notna(row["pr_auc"]):
+                        m["selection_metric"] = "pr_auc"
+                        m["selection_value"] = float(row["pr_auc"])
+                    elif "auc" in row.index and pd.notna(row["auc"]):
+                        m["selection_metric"] = "auc"
+                        m["selection_value"] = float(row["auc"])
+                    elif "brier" in row.index and pd.notna(row["brier"]):
+                        m["selection_metric"] = "brier"
+                        m["selection_value"] = float(row["brier"])
+        
+                    m["source_path"] = ARTIFACT_CSV
             except Exception as e:
-                m, loc = {}, "N/A"
-                st.caption(f"⚠️ Artifact okuma hatası: {e}")
+                m = {}
+                st.caption(f"⚠️ Metrics CSV okunamadı: {e}")
         
         if m:
             pr_auc = m.get("pr_auc")
@@ -711,10 +754,10 @@ if sekme == "Operasyon":
                 meta_bits.append(f"Kaynak: `{m['source_path']}`")
             if m.get("timestamp"):
                 meta_bits.append(f"TS: {m['timestamp']}")
-            meta_bits.append(f"Artifact: `{loc}`")
             st.caption(" · ".join(meta_bits))
         else:
-            st.caption("📊 Artifact içinde uygun metrics_* dosyası bulunamadı.")
+            st.caption(f"📊 Metrics CSV bulunamadı veya boş: `{ARTIFACT_CSV}`")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
