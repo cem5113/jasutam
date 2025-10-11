@@ -20,8 +20,6 @@ _TIER_ALIASES: Dict[str, str] = {
     "yuksek": "Yüksek", "yüksek": "Yüksek",
     "orta": "Orta",
     "dusuk": "Düşük", "düşük": "Düşük",
-    "hafif": "Hafif",
-    "cok hafif": "Çok Hafif", "çok hafif": "Çok Hafif",
     "cok dusuk": "Çok Düşük", "çok düşük": "Çok Düşük",
 }
 def _norm_level(val: Optional[str]) -> Optional[str]:
@@ -34,22 +32,12 @@ def _norm_level(val: Optional[str]) -> Optional[str]:
 # 2) Paletler (LIGHT & DARK)  → RGBA
 _COLOR_LIGHT: Dict[str, List[int]] = {
     "Çok Düşük":  [198, 219, 239, 140],  # #C6DBEF
-    "Çok Hafif":  [198, 219, 239, 140],  # eşdeğer en açık seviye
-    "Hafif":      [158, 202, 225, 160],  # #9ECAE1
     "Düşük":      [107, 174, 214, 180],  # #6BAED6
     "Orta":       [ 74, 140, 217, 200],  # #4A90D9
     "Yüksek":     [239,  59,  44, 210],  # #EF3B2C
     "Çok Yüksek": [255, 102, 102, 220],  # #FF6666
 }
-_COLOR_DARK: Dict[str, List[int]] = {
-    "Çok Düşük":  [120, 150, 170, 180],  # #7896AA
-    "Çok Hafif":  [120, 150, 170, 180],
-    "Hafif":      [ 90, 160, 200, 190],  # #5AA0C8
-    "Düşük":      [ 60, 130, 190, 200],  # #3C82BE
-    "Orta":       [255, 170,   0, 210],  # #FFAA00
-    "Yüksek":     [255,  80,  40, 220],  # #FF5028
-    "Çok Yüksek": [255,  40,  80, 230],  # #FF2850
-}
+
 # Varsayılan (eşleşmeyen/boş) renk
 _DEF_COLOR: List[int] = [90, 120, 140, 180]  # #5A788C → koyu gridemsi mavi
 
