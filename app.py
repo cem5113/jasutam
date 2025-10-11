@@ -836,14 +836,6 @@ if sekme == "Operasyon":
             m = {}
             tables: list[pd.DataFrame] = []
         
-            # 0) Eğer kullanıcı az önce dosya yüklediyse onu kullan (ilerlememe bug'ını giderir)
-            up = st.session_state.get("_metrics_upload")
-            if up is None:
-                up = st.file_uploader("Artifact (ZIP/CSV/TSV/XLSX/Parquet) yükle", type=["zip","csv","tsv","xlsx","parquet"], key="metrics_uploader")
-                if up is not None:
-                    st.session_state["_metrics_upload"] = up
-                    st.rerun()
-        
             if isinstance(up, bytes):
                 pass  # no-op
             elif up is not None:
