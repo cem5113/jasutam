@@ -197,11 +197,11 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
 
 # ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
 PALETTE_5 = {
-    "Çok Yüksek": "#b10026",
-    "Yüksek":     "#e31a1c",
-    "Orta":       "#fc8d59",
-    "Düşük":      "#74add1",
-    "Çok Düşük":  "#a6cee3",
+    "Çok Yüksek": "#b10026",  # koyu kırmızı
+    "Yüksek":     "#e31a1c",  # kırmızı
+    "Orta":       "#fc8d59",  # turuncu
+    "Düşük":      "#74add1",  # mavi
+    "Çok Düşük":  "#a6cee3",  # açık mavi
 }
 PALETTE_4 = {
     "Çok Yüksek": "#b10026",
@@ -209,27 +209,59 @@ PALETTE_4 = {
     "Orta":       "#fc8d59",
     "Düşük":      "#1f77b4",
 }
-PALETTE_3 = {  # geriye uyumluluk
-    "Yüksek": "#d62728", "Orta": "#ff7f0e", "Düşük": "#1f77b4", "Hafif": "#1f77b4",
+PALETTE_3 = {  # geriye uyumluluk (eski 3'lü/4'lüler)
+    "Yüksek": " #d62728",
+    "Orta":   " #ff7f0e",
+    "Düşük":  " #1f77b4",
+    "Hafif":  " #1f77b4",   
 }
 
+# Eski/alternatif etiketleri 5'li skalaya normalize et
+_TIER_ALIASES = {
+    "cok yuksek": "Çok Yüksek",
+    "çok yüksek": "Çok Yüksek",
+    "yuksek":     "Yüksek",
+    "yüksek":     "Yüksek",
+    "orta":       "Orta",
+    "dusuk":      "Düşük",
+    "düşük":      "Düşük",
+    "hafif":      "Düşük",       -
+    "cok dusuk":  "Çok Düşük",
+    "çok düşük":  "Çok Düşük",
+    "cok hafif":  "Çok Düşük",   
+    "çok hafif":  "Çok Düşük",
+}
+
+def _normalize_tier(t: str | None) -> str | None:
+    if t is None:
+        return None
+    key = str(t).strip()
+    low = key.lower()
+    return _TIER_ALIASES.get(low, key)
+
 def _pick_palette_from_labels(labels: list[str]) -> dict:
-    s = set(labels)
-    if {"Çok Düşük","Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(s):  # 5 seviye
+    """DataFrame'den gelen etiketlere göre uygun paleti seç (5→4→3)."""
+    norm = {_normalize_tier(x) for x in labels if x is not None}
+    if {"Çok Düşük","Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):  # 5 seviye
         return PALETTE_5
-    if {"Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(s):              # 4 seviye
+    if {"Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):              # 4 seviye
         return PALETTE_4
     return PALETTE_3
 
 def color_for_tier(tier: str, palette: dict | None = None) -> str:
-    pal = palette or PALETTE_5 | PALETTE_4 | PALETTE_3
-    return pal.get(tier, "#9ecae1")
+    """Tier → renk. Varsayılan: birleşik paletten ara, yoksa açık maviye düş."""
+    pal_merged = PALETTE_5 | PALETTE_4 | PALETTE_3
+    pal = palette or pal_merged
+    t = _normalize_tier(tier)
+    return pal.get(t, "#9ecae3")  # güvenli fallback
 
 def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
+    """NaN/inf filtre ve güvenli tip dönüşümü."""
     out = df[[lat_col, lon_col]].copy()
     out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
     out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
     return out.replace([np.inf, -np.inf], np.nan).dropna()
+
 
 # ───────────────────────────── SONUÇ KARTI ─────────────────────────────
 def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
