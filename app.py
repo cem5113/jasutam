@@ -349,7 +349,7 @@ if sekme == "Operasyon":
         if agg is not None:
             if engine == "Folium":
                 try:
-                    # build_map_fast yeni imza: add_layer_control parametresi var
+                    # build_map_fast varsa LayerControl'u biz ekleyeceğiz
                     m = build_map_fast(
                         df_agg=agg,
                         geo_features=GEO_FEATURES,
@@ -357,13 +357,13 @@ if sekme == "Operasyon":
                         show_popups=show_popups,
                         patrol=st.session_state.get("patrol"),
                 
-                        # katmanlar
+                        # hotspot katmanlarını üret
                         show_hotspot=True,
                         perm_hotspot_mode="heat",
                         show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
                 
-                        # LayerControl'u biz ekleyeceğiz → kapat
+                        # kendi kontrolümüzü ekleyeceğiz
                         add_layer_control=False,
                         risk_layer_show=True,
                         perm_hotspot_show=True,
@@ -373,7 +373,7 @@ if sekme == "Operasyon":
                         temp_hotspot_layer_name="Hotspot (kalıcı)",
                     )
                 except TypeError:
-                    # Eski imza: add_layer_control yok → önce üret
+                    # Eski imza: add_layer_control yok
                     m = build_map_fast(
                         df_agg=agg,
                         geo_features=GEO_FEATURES,
@@ -385,19 +385,28 @@ if sekme == "Operasyon":
                         show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
                     )
-                    # Eğer build_map_fast kendi LayerControl'unu eklediyse kaldır
+                    # build_map_fast LayerControl eklediyse kaldır
                     for k, ch in list(m._children.items()):
                         if isinstance(ch, folium.map.LayerControl):
                             del m._children[k]
                 
-                # Kendi LayerControl’umuz: KAPALI (collapsed) ve sağ üstte
+                # — Taban katman + açık atıf (OSM & CARTO) —
+                folium.TileLayer(
+                    tiles="CartoDB positron",
+                    name="cartodbpositron",
+                    control=True,
+                    attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+                         'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                ).add_to(m)
+                
+                # — Katman menüsü: tek ikon, kapalı (collapsed) —
                 folium.LayerControl(
                     position="topright",
-                    collapsed=True,      # ← menü ikonun altında, tıklayınca açılır
+                    collapsed=True,     # ← ikonun altına gömülü
                     autoZIndex=True
                 ).add_to(m)
                 
-                # çizdir
+                # Çizdir
                 ret = st_folium(
                     m,
                     key="riskmap",
