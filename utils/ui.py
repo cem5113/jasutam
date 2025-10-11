@@ -204,26 +204,26 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
 # ───────────────────────────── PALET / RENK EŞLEYİCİ (REVİZE) ─────────────────────────────
 # 5'li skala (en kapsamlı)
 PALETTE_5: dict[str, str] = {
-    "Çok Yüksek": "#b10026",  # koyu kırmızı
-    "Yüksek":     "#e31a1c",  # kırmızı
-    "Orta":       "#fc8d59",  # turuncu
-    "Düşük":      "#74add1",  # mavi
-    "Çok Düşük":  "#a6cee3",  # açık mavi
+    "Çok Yüksek": "#FF6666",  # koyu kırmızı
+    "Yüksek":     "#EF3B2C",  # kırmızı
+    "Orta":       "#4A90D9",  # turuncu
+    "Düşük":      "#EF3B2C",  # mavi
+    "Çok Düşük":  "#FF6666",  # açık mavi
 }
 
 # 4'lü skala
 PALETTE_4: dict[str, str] = {
-    "Çok Yüksek": "#b10026",
-    "Yüksek":     "#e31a1c",
-    "Orta":       "#fc8d59",
-    "Düşük":      "#1f77b4",
+    "Çok Yüksek": "#FF6666",  # koyu kırmızı
+    "Yüksek":     "#EF3B2C",  # kırmızı
+    "Orta":       "#4A90D9",  # turuncu
+    "Düşük":      "#EF3B2C",  # mavi
 }
 
 # 3'lü skala (geriye uyumluluk)
 PALETTE_3: dict[str, str] = {
-    "Yüksek": "#d62728",
-    "Orta":   "#ff7f0e",
-    "Düşük":  "#1f77b4",
+    "Yüksek":     "#EF3B2C",  # kırmızı
+    "Orta":       "#4A90D9",  # turuncu
+    "Düşük":      "#EF3B2C",  # mavi
 }
 
 # Not: Bazı modeller "Çok Hafif/Hafif" üretir.
