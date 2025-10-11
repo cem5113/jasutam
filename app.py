@@ -33,6 +33,9 @@ from utils.ui import (
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
 
+from services.metrics import get_latest_metrics, METRICS_FILE
+import os
+
 metrics = get_latest_metrics()
 if metrics:
     col1, col2, col3 = st.columns(3)
@@ -42,6 +45,9 @@ if metrics:
         col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
     if metrics.get("brier") is not None:
         col3.metric("Brier Score", f"{metrics['brier']:.3f}")
+else:
+    # Teşhis amaçlı; istersen bu uyarıyı silebilirsin
+    st.caption("📊 KPI için ölçüm dosyası bulunamadı: " + METRICS_FILE)
 
 # Opsiyonel modüller
 try:
