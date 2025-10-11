@@ -6,8 +6,6 @@ import time
 import folium
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from services.metrics import get_latest_metrics, update_from_csv, METRICS_FILE
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -30,6 +28,7 @@ from utils.ui import (
     render_day_hour_heatmap as fallback_heatmap,
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
+from services.metrics import get_latest_metrics_from_artifact, artifact_location
 from components.last_update import show_last_update_badge
 
 # Opsiyonel modüller
@@ -341,7 +340,10 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-metrics = get_latest_metrics()
+metrics = get_latest_metrics_from_artifact(
+    hit_col=os.environ.get("SUTAM_HIT_COL"),
+    prefer_group=os.environ.get("SUTAM_METRICS_GROUP"),
+)
 if metrics:
     col1, col2, col3 = st.columns(3)
     if metrics.get("auc") is not None:
@@ -351,8 +353,7 @@ if metrics:
     if metrics.get("brier") is not None:
         col3.metric("Brier Score", f"{metrics['brier']:.3f}")
 else:
-    # İstersen bu teşhis satırını kaldırabilirsin
-    st.caption(f"📊 KPI için ölçüm dosyası bulunamadı: {METRICS_FILE}")
+    st.caption(f"📊 Artifact içinde metrics_* bulunamadı. Kaynak: {artifact_location()}")
 
 # Veri sonu
 try:
@@ -685,18 +686,16 @@ if sekme == "Operasyon":
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
         
-        # ── Güncel Model Metrikleri (artifact ZIP → göster) ──────────────────────────
+        # ── Güncel Model Metrikleri (artifact ZIP/klasör → göster) ───────────────────
         sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
         
         with st.spinner("Artifact'tan metrikler çekiliyor..."):
             try:
-                hit_col_env = os.environ.get("SUTAM_HIT_COL")            # örn: "hit_rate@100" veya "hit_rate_topk"
-                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")      # opsiyonel (örn. "stacking")
-                # ENV ile: SUTAM_ARTIFACT_ZIP veya SUTAM_ARTIFACT_DIR kullanılır
-                from services.metrics import get_latest_metrics_from_artifact, artifact_location
-                m = get_latest_metrics_from_artifact(hit_col=hit_col_env, prefer_group=prefer_grp)
+                hit_col_env = os.environ.get("SUTAM_HIT_COL")       # örn: "hit_rate_topk"
+                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP") # örn: "stacking"
+                m   = get_latest_metrics_from_artifact(hit_col=hit_col_env, prefer_group=prefer_grp)
                 loc = artifact_location()
             except Exception as e:
                 m, loc = {}, "N/A"
@@ -731,7 +730,6 @@ if sekme == "Operasyon":
             st.caption(" · ".join(meta_bits))
         else:
             st.caption("📊 Artifact içinde uygun metrics_* dosyası bulunamadı.")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
