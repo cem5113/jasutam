@@ -200,6 +200,7 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
     return f"{start:%H:%M}–{t2:%H:%M}"
 
 # ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
+# -*- coding: utf-8 -*-
 # ───────────────────────────── PALET / RENK EŞLEYİCİ (REVİZE) ─────────────────────────────
 # 5'li skala (en kapsamlı)
 PALETTE_5: dict[str, str] = {
@@ -269,13 +270,6 @@ def color_for_tier(tier: str, palette: dict[str, str] | None = None) -> str:
     pal = palette or pal_merged
     t = _normalize_tier(tier)
     return pal.get(t, "#9ecae1")
-
-def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
-    """NaN/inf filtre ve güvenli tip dönüşümü."""
-    out = df[[lat_col, lon_col]].copy()
-    out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
-    out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
-    return out.replace([np.inf, -np.inf], np.nan).dropna()-
     
 # ───────────────────────────── SONUÇ KARTI ─────────────────────────────
 def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
