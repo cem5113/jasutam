@@ -177,7 +177,7 @@ def run_prediction(start_h: int, end_h: int, filters: dict, geo_df: pd.DataFrame
     if isinstance(agg, pd.DataFrame) and "expected" in agg.columns and not agg.empty:
         q20, q40, q60, q80 = np.quantile(agg["expected"].to_numpy(), [0.20, 0.40, 0.60, 0.80])
         bins = [-np.inf, q20, q40, q60, q80, np.inf]
-        labels = ["Çok Hafif", "Hafif", "Düşük", "Orta", "Çok Yüksek"]
+        labels = ["Çok Düşük","Düşük", "Orta", "Çok Yüksek"]
         agg = agg.copy()
         agg["tier"] = pd.cut(agg["expected"], bins=bins, labels=labels, include_lowest=True).astype(str)
     agg = ensure_keycol(agg, KEY_COL)
@@ -463,18 +463,18 @@ if sekme == "Operasyon":
             kpi_expected = round(float(a["expected"].sum()), 2)
             cnts = {
                 "Çok Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Çok Yüksek").sum()),
+                "Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Yüksek").sum()),
                 "Orta": int((a.get("tier", pd.Series(dtype=str)) == "Orta").sum()),
                 "Düşük": int((a.get("tier", pd.Series(dtype=str)) == "Düşük").sum()),
-                "Hafif": int((a.get("tier", pd.Series(dtype=str)) == "Hafif").sum()),
-                "Çok Hafif": int((a.get("tier", pd.Series(dtype=str)) == "Çok Hafif").sum()),
+                "Çok Düşük": int((a.get("tier", pd.Series(dtype=str)) == "Çok Düşük").sum()),
             }
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
                 ("Çok Yüksek", cnts["Çok Yüksek"], "En yüksek riskli hücre sayısı (üst %20)"),
+                ("Yüksek", cnts["Yüksek"], "Yüksek kademe riskli hücre sayısı"),
                 ("Orta", cnts["Orta"], "Orta kademe riskli hücre sayısı"),
                 ("Düşük", cnts["Düşük"], "Düşük kademe riskli hücre sayısı"),
-                ("Hafif", cnts["Hafif"], "Hafif kademe riskli hücre sayısı"),
-                ("Çok Hafif", cnts["Çok Hafif"], "En düşük riskli hücre sayısı (alt %20)"),
+                ("Çok Düşük", cnts["Çok Düşük"], "En düşük riskli hücre sayısı (alt %20)"),
             ])
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
