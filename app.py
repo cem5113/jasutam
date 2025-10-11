@@ -69,6 +69,51 @@ except Exception:
             df = df.rename(columns={"lon": "longitude"})
         return df
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Yardımcılar: KEY_COL ve centroid sütunlarını savunmalı şekilde garanti et
+# ─────────────────────────────────────────────────────────────────────────────
+def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
+    """DataFrame içinde KEY_COL adını garanti eder ve string tipe çevirir."""
+    if df is None or df.empty:
+        return df
+    if want in df.columns:
+        out = df.copy()
+        out[want] = out[want].astype(str)
+        return out
+    alts = {want.upper(), want.lower(), "GEOID", "geoid", "GeoID"}
+    hit = None
+    for c in df.columns:
+        if c in alts:
+            hit = c
+            break
+    out = df.copy()
+    if hit is not None and hit != want:
+        out = out.rename(columns={hit: want})
+    if want in out.columns:
+        out[want] = out[want].astype(str)
+    return out
+
+def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Centroid kolon adlarını standardize eder."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    rename_map = {}
+    if "centroid_lat" not in out.columns:
+        if "Centroid_Lat" in out.columns: rename_map["Centroid_Lat"] = "centroid_lat"
+        if "CENTROID_LAT" in out.columns: rename_map["CENTROID_LAT"] = "centroid_lat"
+        if "lat" in out.columns and "centroid_lon" in out.columns:
+            rename_map["lat"] = "centroid_lat"
+    if "centroid_lon" not in out.columns:
+        if "Centroid_Lon" in out.columns: rename_map["Centroid_Lon"] = "centroid_lon"
+        if "CENTROID_LON" in out.columns: rename_map["CENTROID_LON"] = "centroid_lon"
+        if "lon" in out.columns and "centroid_lat" in out.columns:
+            rename_map["lon"] = "centroid_lon"
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    return out
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Sayfa ayarı
 st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
@@ -98,6 +143,7 @@ show_last_update_badge(
 
 # ── Geo katmanı
 GEO_DF, GEO_FEATURES = load_geoid_layer("data/sf_cells.geojson")
+GEO_DF = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
 if GEO_DF.empty:
     st.error("GEOJSON yüklenemedi veya satır yok.")
     st.stop()
@@ -129,7 +175,7 @@ show_transit = False
 # Grafik kapsamı (istatistikler için)
 scope = st.sidebar.radio("Grafik kapsamı", ["Tüm şehir", "Seçili hücre"], index=0)
 
-# Hotspot ayarları (Geçici hotspot akışına dokunma)
+# Hotspot ayarları
 show_hotspot      = True
 show_temp_hotspot = True
 
@@ -197,8 +243,8 @@ if sekme == "Operasyon":
                 nr_decay_h=12.0,
                 filters=filters,
             )
-            
-            # === 5 kademeli tier ataması (Çok Yüksek, Orta, Düşük, Hafif, Çok Hafif) ===
+
+            # === 5 kademeli tier ataması (Çok Hafif → Çok Yüksek) ===
             try:
                 if isinstance(agg, pd.DataFrame) and "expected" in agg.columns:
                     q20, q40, q60, q80 = np.quantile(agg["expected"].to_numpy(), [0.20, 0.40, 0.60, 0.80])
@@ -207,9 +253,11 @@ if sekme == "Operasyon":
                     agg = agg.copy()
                     agg["tier"] = pd.cut(agg["expected"], bins=bins, labels=labels, include_lowest=True).astype(str)
             except Exception:
-                # Bir sorun olursa mevcut 'tier' olduğu gibi kalsın
                 pass
-            
+
+            # KEY_COL standardizasyonu
+            agg = ensure_keycol(agg, KEY_COL)
+
             st.session_state.update({
                 "agg": agg,
                 "patrol": None,
@@ -231,7 +279,7 @@ if sekme == "Operasyon":
                     near_repeat_alpha=0.0,
                     filters=None
                 )
-                st.session_state["agg_long"] = agg_long
+                st.session_state["agg_long"] = ensure_keycol(agg_long, KEY_COL)
             except Exception:
                 st.session_state["agg_long"] = None
 
@@ -277,18 +325,24 @@ if sekme == "Operasyon":
         else:
             temp_points = pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
-        # Fallback: üst risk hücrelerinden sentetik ısı
+        # Fallback: üst risk hücrelerinden sentetik ısı (→ BURADA normalize ET!)
         if show_temp_hotspot and temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
             topn = 80
-            tmp = (
-                agg.nlargest(topn, "expected")
-                   .merge(GEO_DF[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL, how="left")
-                   .dropna(subset=["centroid_lat", "centroid_lon"])
-            )
-            temp_points = tmp.rename(columns={"centroid_lat": "latitude", "centroid_lon": "longitude"})[
-                ["latitude", "longitude"]
-            ]
-            temp_points["weight"] = tmp["expected"].clip(lower=0).astype(float)
+            agg2 = ensure_keycol(agg, KEY_COL)
+            geo2 = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
+            try:
+                tmp = (
+                    agg2.nlargest(topn, "expected")
+                        .merge(geo2[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL, how="left")
+                        .dropna(subset=["centroid_lat", "centroid_lon"])
+                )
+                temp_points = tmp.rename(columns={"centroid_lat": "latitude", "centroid_lon": "longitude"})[
+                    ["latitude", "longitude"]
+                ]
+                temp_points["weight"] = tmp["expected"].clip(lower=0).astype(float)
+            except Exception as e:
+                st.warning(f"Hotspot fallback oluşturulamadı: {e}")
+                temp_points = pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
         st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
 
@@ -313,7 +367,7 @@ if sekme == "Operasyon":
                     m,
                     key="riskmap",
                     height=540,
-                    width=1600,  # ← istediğin piksel genişliği (örnek: 1000–1600 arası)
+                    width=1600,  # genişlik
                     returned_objects=["last_object_clicked", "last_clicked"]
                 )
                 if ret:
@@ -358,13 +412,13 @@ if sekme == "Operasyon":
         if st.session_state["agg"] is not None:
             a = st.session_state["agg"]
             kpi_expected = round(float(a["expected"].sum()), 2)
-        
+
             cnt_cok_yuksek = int((a["tier"] == "Çok Yüksek").sum())
             cnt_orta       = int((a["tier"] == "Orta").sum())
             cnt_dusuk      = int((a["tier"] == "Düşük").sum())
             cnt_hafif      = int((a["tier"] == "Hafif").sum())
             cnt_cok_hafif  = int((a["tier"] == "Çok Hafif").sum())
-        
+
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
                 ("Çok Yüksek",          cnt_cok_yuksek, "En yüksek riskli hücre sayısı (üst %20)"),
@@ -389,8 +443,11 @@ if sekme == "Operasyon":
                 if "nr_boost" in df_agg.columns:
                     cols.append("nr_boost")
 
+                # KEY_COL güvenliği
+                df_agg2 = ensure_keycol(df_agg, KEY_COL)
+
                 tab = (
-                    df_agg[cols]
+                    df_agg2[cols]
                     .sort_values("expected", ascending=False)
                     .head(n).reset_index(drop=True)
                 )
