@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import folium
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
@@ -348,29 +349,62 @@ if sekme == "Operasyon":
         if agg is not None:
             if engine == "Folium":
                 try:
+                    # build_map_fast yeni imza: add_layer_control parametresi var
                     m = build_map_fast(
-                        df_agg=agg, geo_features=GEO_FEATURES, geo_df=GEO_DF,
-                        show_popups=show_popups, patrol=st.session_state.get("patrol"),
-                        show_poi=show_poi, show_transit=show_transit,
-                        show_hotspot=True, perm_hotspot_mode="heat",
-                        show_temp_hotspot=True, temp_hotspot_points=temp_points,
-                        add_layer_control=True, risk_layer_show=True,
-                        perm_hotspot_show=True, temp_hotspot_show=True,
-                        risk_layer_name="Tahmin Haritası",
-                        perm_hotspot_layer_name="Kalıcı Hotspot",
-                        temp_hotspot_layer_name="Geçici Hotspot",
-                        layer_control_position="topright",
-                        layer_control_collapsed=True,
+                        df_agg=agg,
+                        geo_features=GEO_FEATURES,
+                        geo_df=GEO_DF,
+                        show_popups=show_popups,
+                        patrol=st.session_state.get("patrol"),
+                
+                        # katmanlar
+                        show_hotspot=True,
+                        perm_hotspot_mode="heat",
+                        show_temp_hotspot=True,
+                        temp_hotspot_points=temp_points,
+                
+                        # LayerControl'u biz ekleyeceğiz → kapat
+                        add_layer_control=False,
+                        risk_layer_show=True,
+                        perm_hotspot_show=True,
+                        temp_hotspot_show=True,
+                        risk_layer_name="Tahmin (risk)",
+                        perm_hotspot_layer_name="Hotspot (geçici)",
+                        temp_hotspot_layer_name="Hotspot (kalıcı)",
                     )
                 except TypeError:
-                    # Eski imza için geriye dönük
+                    # Eski imza: add_layer_control yok → önce üret
                     m = build_map_fast(
-                        df_agg=agg, geo_features=GEO_FEATURES, geo_df=GEO_DF,
-                        show_popups=show_popups, patrol=st.session_state.get("patrol"),
-                        show_hotspot=True, perm_hotspot_mode="heat",
-                        show_temp_hotspot=True, temp_hotspot_points=temp_points,
+                        df_agg=agg,
+                        geo_features=GEO_FEATURES,
+                        geo_df=GEO_DF,
+                        show_popups=show_popups,
+                        patrol=st.session_state.get("patrol"),
+                        show_hotspot=True,
+                        perm_hotspot_mode="heat",
+                        show_temp_hotspot=True,
+                        temp_hotspot_points=temp_points,
                     )
-                ret = st_folium(m, key="riskmap", height=540, returned_objects=["last_object_clicked", "last_clicked"])
+                    # Eğer build_map_fast kendi LayerControl'unu eklediyse kaldır
+                    for k, ch in list(m._children.items()):
+                        if isinstance(ch, folium.map.LayerControl):
+                            del m._children[k]
+                
+                # Kendi LayerControl’umuz: KAPALI (collapsed) ve sağ üstte
+                folium.LayerControl(
+                    position="topright",
+                    collapsed=True,      # ← menü ikonun altında, tıklayınca açılır
+                    autoZIndex=True
+                ).add_to(m)
+                
+                # çizdir
+                ret = st_folium(
+                    m,
+                    key="riskmap",
+                    height=540,
+                    width=1600,
+                    returned_objects=["last_object_clicked", "last_clicked"],
+                )
                 if ret:
                     gid, _ = resolve_clicked_gid(GEO_DF, ret)
                     if gid:
