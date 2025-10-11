@@ -123,9 +123,6 @@ st.sidebar.header("Devriye Parametreleri")
 engine = st.sidebar.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
 
 # Harita katmanları
-st.sidebar.subheader("Harita katmanları")
-show_poi     = st.sidebar.checkbox("POI overlay", value=False)
-show_transit = st.sidebar.checkbox("Toplu taşıma overlay", value=False)
 show_popups  = st.sidebar.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
 
 # Grafik kapsamı (istatistikler için)
@@ -324,8 +321,6 @@ if sekme == "Operasyon":
                     geo_df=GEO_DF,
                     show_popups=show_popups,
                     patrol=st.session_state.get("patrol"),
-                    show_poi=show_poi,
-                    show_transit=show_transit,
 
                     show_hotspot=show_hotspot,
                     perm_hotspot_mode="heat",
@@ -353,8 +348,6 @@ if sekme == "Operasyon":
                 else:
                     deck = build_map_fast_deck(
                         agg, GEO_DF,
-                        show_poi=show_poi,
-                        show_transit=show_transit,
                         patrol=st.session_state.get("patrol"),
                         show_hotspot=show_hotspot,
                         show_temp_hotspot=show_temp_hotspot,
