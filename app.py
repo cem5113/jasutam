@@ -404,9 +404,9 @@ hot_hours_rng = st.sidebar.slider("Saat aralığı (hotspot)", 0, 24, (0, 24), d
 # Zaman ufku (gerçek zamanlı gösterim)
 current_time = datetime.now().strftime('%H:%M')
 current_date = datetime.now().strftime('%Y-%m-%d')
-st.sidebar.markdown(f"**From {current_time} (Today, {current_date})**")
+ufuk_label = f"Zaman Aralığı (from {current_time}, today, {current_date})"
 
-ufuk = st.sidebar.radio("Zaman Aralığı (real time)", ["24s", "48s", "7g"], index=0, horizontal=True)
+ufuk = st.sidebar.radio(ufuk_label, ["24s", "48s", "7g"], index=0, horizontal=True)
 max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7*24, 24)
 start_h, end_h = st.sidebar.slider("Saat filtresi", min_value=0, max_value=max_h, value=(0, max_h), step=step)
 
