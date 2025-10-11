@@ -433,21 +433,13 @@ if sekme == "Operasyon":
                     deck = build_map_fast_deck(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        show_poi=show_poi,                         # (şimdilik kullanılmıyor ama imzada var)
-                        show_transit=show_transit,                 # (şimdilik kullanılmıyor ama imzada var)
-                        patrol=st.session_state.get("patrol"),     # (şimdilik kullanılmıyor ama imzada var)
-                    
-                        # katmanlar
-                        show_hotspot=True,                         # ← eski 'show_perm_hotspot' yerine
+                        show_hotspot=True,
                         show_temp_hotspot=show_temp_hotspot,
                         temp_hotspot_points=temp_points,
-                        show_risk_layer=True,                      # ← eski 'show_risk_layer' yerine sabit/açık
-                    
-                        # opsiyonel görünüm/tema (istersen sabitleyebilirsin)
+                        show_risk_layer=True,
                         map_style=("mapbox://styles/mapbox/dark-v11" if st.session_state.get("dark_mode")
                                    else "mapbox://styles/mapbox/light-v11"),
                         initial_view={"lat": 37.7749, "lon": -122.4194, "zoom": 11.8},
-                    )
                     st.pydeck_chart(deck)
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
