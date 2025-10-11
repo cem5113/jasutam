@@ -673,7 +673,7 @@ if sekme == "Operasyon":
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
-        
+            
         import streamlit as st
         import pandas as pd
         from dataio.loaders import load_sf_crime_latest
@@ -742,7 +742,23 @@ if sekme == "Operasyon":
                 if pd.notna(brier):
                     c2.metric("Brier Score", f"{float(brier):.3f}")
                 if "hit_rate_topk" in best and pd.notna(best["hit_rate_topk"]):
-            
+                    c3.metric("Hit@TopK", f"{best['hit_rate_topk']*100:.1f}%")
+        
+                serving_model = str(best.get("model", "unknown"))
+                model_group = str(best.get("group", ""))
+        
+                st.session_state["serving_model"] = serving_model
+                st.session_state["serving_group"] = model_group
+                st.caption(
+                    f"📦 Seçilen model: **{serving_model}**"
+                    + (f" · grup: `{model_group}`" if model_group else "")
+                    + (f" · metrik: **PR-AUC={pr_auc:.3f}**" if pd.notna(pr_auc) else "")
+                )
+            else:
+                st.warning("⚠️ En iyi satır seçilemedi.")
+        else:
+            st.error("❌ Metrik tablosu boş veya yüklenemedi.")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
 # ─────────────────────────────────────────────────────────────────────────────
