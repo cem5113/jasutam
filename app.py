@@ -676,79 +676,109 @@ if sekme == "Operasyon":
         
         from dataio.loaders import load_sf_crime_latest
         
+        import pandas as pd
+        import streamlit as st
+        from dataio.loaders import load_sf_crime_latest
+        
+        # ── 1) Veriyi yükle ───────────────────────────────────────────
         with st.spinner("🔄 En güncel metrikler yükleniyor..."):
             df, src = load_sf_crime_latest()
         
-        if src == "artifact":
-            st.success("✅ Artifact'tan okundu")
-        elif src == "release":
-            st.info("📦 Release sürümünden okundu")
-        else:
-            st.warning(f"Yerel veya cache verisi kullanıldı ({src})")
+        src_msg = {"artifact": "✅ Artifact'tan okundu",
+                   "release": "📦 Release sürümünden okundu"}
+        st.caption(src_msg.get(src, f"ℹ️ Yerel veya cache verisi kullanıldı ({src})"))
         
-        def pick_best_row(cand):
-            # Öncelik: pr_auc (yüksek) → brier (düşük) → log_loss (düşük) → roc_auc (yüksek)
-            cols = {c.lower(): c for c in cand.columns}
+        # ── 2) Yardımcılar ────────────────────────────────────────────
+        def _lower_map(cols):
+            """Kolon adlarını case-insensitive kullanmak için mapping döndürür."""
+            return {c.lower(): c for c in cols}
+        
+        def pick_best_row(cand: pd.DataFrame) -> pd.Series:
+            """
+            Öncelik: pr_auc (yüksek) → brier (düşük) → log_loss (düşük) → roc_auc (yüksek).
+            Uygun kolon yoksa eldeki en mantıklı kombinasyonla sıralar.
+            """
+            if cand.empty:
+                raise ValueError("Boş DataFrame")
+        
+            cols = _lower_map(cand.columns)
             df2 = cand.copy()
-            # eksik kolon varsa default ile doldur
-            for need in ["pr_auc","brier","log_loss","roc_auc"]:
-                if need not in cols:
-                    continue
-                # nothing—varsa zaten kullanır
+        
+            # Numerik olması beklenen kolonları güvenle sayıya çevir (NaN toleranslı)
+            for key in ("pr_auc", "roc_auc", "brier", "log_loss"):
+                if key in cols:
+                    df2[cols[key]] = pd.to_numeric(df2[cols[key]], errors="coerce")
+        
             sort_keys = []
-            if "pr_auc" in cols:   sort_keys.append((cols["pr_auc"], False))
-            if "brier" in cols:    sort_keys.append((cols["brier"], True))
-            if "log_loss" in cols: sort_keys.append((cols["log_loss"], True))
-            if "roc_auc" in cols:  sort_keys.append((cols["roc_auc"], False))
+            if "pr_auc"  in cols: sort_keys.append((cols["pr_auc"],  False))
+            if "brier"   in cols: sort_keys.append((cols["brier"],   True))
+            if "log_loss" in cols:sort_keys.append((cols["log_loss"], True))
+            if "roc_auc" in cols: sort_keys.append((cols["roc_auc"], False))
+        
             if not sort_keys:
-                return cand.iloc[0]
-            by = [k for k, _ in sort_keys]
+                # Hiçbiri yoksa ilk satır
+                return df2.iloc[0]
+        
+            by  = [k for k, _ in sort_keys]
             asc = [a for _, a in sort_keys]
             return df2.sort_values(by=by, ascending=asc, kind="mergesort").iloc[0]
         
-        # KPI + serving model seçimi
-        if not df.empty:
+        # ── 3) Gösterim + seçim ───────────────────────────────────────
+        if df is None or df.empty:
+            st.info("Metrik tablosu boş görünüyor.")
+        else:
+            # Üstte küçük bir önizleme ve kolon listesi (teşhis için faydalı)
+            with st.expander("Metrik tablosu (ilk 20 satır)"):
+                st.dataframe(df.head(20), use_container_width=True)
+                st.caption("Kolonlar: " + ", ".join(map(str, df.columns.tolist())))
+        
             best = pick_best_row(df)
         
             # KPI kutuları
-            pr_auc = best.get("pr_auc")
-            rocauc = best.get("roc_auc")
-            brier  = best.get("brier")
+            cols_map = _lower_map(best.index)
+            pr_auc = float(best[cols_map["pr_auc"]]) if "pr_auc" in cols_map and pd.notna(best[cols_map["pr_auc"]]) else None
+            rocauc = float(best[cols_map["roc_auc"]]) if "roc_auc" in cols_map and pd.notna(best[cols_map["roc_auc"]]) else None
+            brier  = float(best[cols_map["brier"]])  if "brier"  in cols_map and pd.notna(best[cols_map["brier"]])  else None
+            hitk   = float(best[cols_map["hit_rate_topk"]]) if "hit_rate_topk" in cols_map and pd.notna(best[cols_map["hit_rate_topk"]]) else None
         
             c1, c2, c3 = st.columns(3)
-            if pd.notna(pr_auc):
-                c1.metric("PR-AUC", f"{float(pr_auc):.3f}")
-            elif pd.notna(rocauc):
-                c1.metric("AUC (ROC)", f"{float(rocauc):.3f}")
+            if pr_auc is not None:
+                c1.metric("PR-AUC", f"{pr_auc:.3f}")
+            elif rocauc is not None:
+                c1.metric("AUC (ROC)", f"{rocauc:.3f}")
+            else:
+                c1.metric("PR-AUC", "—")
         
-            if pd.notna(brier):
-                c2.metric("Brier Score", f"{float(brier):.3f}")
+            c2.metric("Brier Score", f"{brier:.3f}" if brier is not None else "—")
+            if hitk is not None:
+                c3.metric("Hit@TopK", f"{hitk*100:.1f}%")
+            else:
+                c3.metric("Hit@TopK", "—")
         
-            # Hit@TopK kolonun yoksa göstermeyiz
-            if "hit_rate_topk" in best and pd.notna(best["hit_rate_topk"]):
-                c3.metric("Hit@TopK", f"{float(best['hit_rate_topk'])*100:.1f}%")
+            # Seçilen model/gruppe
+            model_col = cols_map.get("model")
+            group_col = cols_map.get("group")
+            serving_model = str(best[model_col]) if model_col else "unknown"
+            model_group   = str(best[group_col]) if group_col else ""
         
-            # Sunulacak model bilgisini UI/servis için kaydet
-            serving_model = str(best.get("model", "unknown"))
-            model_group   = str(best.get("group", ""))  # "base" / "stacking" vb.
-        
-            st.session_state["serving_model"] = serving_model
-            st.session_state["serving_group"] = model_group
-            st.session_state["serving_metric"] = "pr_auc" if pd.notna(pr_auc) else ("roc_auc" if pd.notna(rocauc) else None)
-            st.session_state["serving_metric_value"] = float(pr_auc) if pd.notna(pr_auc) else (float(rocauc) if pd.notna(rocauc) else None)
+            # State’e yaz (diğer modüller kullanabilsin)
+            st.session_state["serving_model"]        = serving_model
+            st.session_state["serving_group"]        = model_group
+            st.session_state["serving_metric"]       = "pr_auc" if pr_auc is not None else ("roc_auc" if rocauc is not None else None)
+            st.session_state["serving_metric_value"] = pr_auc if pr_auc is not None else (rocauc if rocauc is not None else None)
         
             st.caption(
                 f"📦 Seçilen model: **{serving_model}**"
                 + (f" · grup: `{model_group}`" if model_group else "")
-                + (f" · seçim: **{st.session_state['serving_metric']}={st.session_state['serving_metric_value']:.3f}**" if st.session_state["serving_metric"] else "")
+                + (f" · seçim: **{st.session_state['serving_metric']}={st.session_state['serving_metric_value']:.3f}**"
+                   if st.session_state.get('serving_metric_value') is not None else "")
             )
         
-            # ⬇️ Eğer model ağırlıklarını ada göre yükleyeceksen burada kullan:
-            # örnek: models/{group}/{model}/... gibi bir düzen
-            # weights_path = f"models/{model_group}/{serving_model}/weights.pkl"
-            # load_weights(weights_path)
-        else:
-            st.info("Metrik tablosu boş görünüyor.")
+            # (Opsiyonel) Tam satırı göster
+            with st.expander("Seçilen satır (ham)"):
+                st.json({str(k): (None if pd.isna(v) else (float(v) if isinstance(v, (int,float)) else str(v)))
+                         for k, v in best.items()})
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
