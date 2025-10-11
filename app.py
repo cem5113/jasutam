@@ -313,7 +313,7 @@ if sekme == "Operasyon":
                     m,
                     key="riskmap",
                     height=540,
-                    width=1200,  # ← istediğin piksel genişliği (örnek: 1000–1600 arası)
+                    width=1600,  # ← istediğin piksel genişliği (örnek: 1000–1600 arası)
                     returned_objects=["last_object_clicked", "last_clicked"]
                 )
                 if ret:
