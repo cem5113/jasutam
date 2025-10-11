@@ -34,8 +34,8 @@ _COLOR_LIGHT: Dict[str, List[int]] = {
     "Çok Düşük":  [198, 219, 239, 140],  # #C6DBEF
     "Düşük":      [107, 174, 214, 180],  # #6BAED6
     "Orta":       [ 74, 140, 217, 200],  # #4A90D9
-    "Yüksek":     [239,  59,  44, 210],  # #EF3B2C
-    "Çok Yüksek": [255, 102, 102, 220],  # #FF6666
+    "Yüksek":     [255, 192, 122, 210],  # #FFC07A
+    "Çok Yüksek": [239,  59,  44, 210],  # #EF3B2C
 }
 
 # Varsayılan (eşleşmeyen/boş) renk
