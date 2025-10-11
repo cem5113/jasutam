@@ -352,53 +352,73 @@ if sekme == "Operasyon":
 
         st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
 
-        if agg is not None:
-            if engine == "Folium":
-                # Folium harita
-                m = build_map_fast(
-                    df_agg=agg,
-                    geo_features=GEO_FEATURES,
-                    geo_df=GEO_DF,
-                    show_popups=show_popups,
-                    patrol=st.session_state.get("patrol"),
-                    show_hotspot=show_hotspot,
-                    perm_hotspot_mode="heat",
-                    show_temp_hotspot=show_temp_hotspot,
-                    temp_hotspot_points=temp_points,
-                )
-                import folium
-                assert isinstance(m, folium.Map), f"st_folium beklediği tipte değil: {type(m)}"
+if agg is not None:
+    if engine == "Folium":
+        # --- Sidebar'da katman görünürlüğü kontrolü ---
+        risk_layer_show     = st.sidebar.checkbox("Tahmin (risk) katmanı", value=True)
+        perm_hotspot_show   = st.sidebar.checkbox("Hotspot (kalıcı)", value=True)
+        temp_hotspot_show   = st.sidebar.checkbox("Hotspot (geçici)", value=True)
 
-                ret = st_folium(
-                    m,
-                    key="riskmap",
-                    height=540,
-                    width=1600,  # genişlik
-                    returned_objects=["last_object_clicked", "last_clicked"]
-                )
-                if ret:
-                    gid, _ = resolve_clicked_gid(GEO_DF, ret)
-                    if gid:
-                        st.session_state["explain"] = {"geoid": gid}
+        # Katman adları (opsiyonel, constants.py ile de çekilebilir)
+        risk_layer_name         = "Tahmin (risk)"
+        perm_hotspot_layer_name = "Hotspot (kalıcı)"
+        temp_hotspot_layer_name = "Hotspot (geçici)"
 
-            else:
-                # Pydeck harita
-                if build_map_fast_deck is None:
-                    st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
-                    ret = None
-                else:
-                    deck = build_map_fast_deck(
-                        agg, GEO_DF,
-                        show_poi=show_poi,
-                        show_transit=show_transit,
-                        patrol=st.session_state.get("patrol"),
-                        show_hotspot=show_hotspot,
-                        show_temp_hotspot=show_temp_hotspot,
-                        temp_hotspot_points=temp_points,
-                    )
-                    st.pydeck_chart(deck)
-                    ret = None
+        # Folium harita
+        m = build_map_fast(
+            df_agg=agg,
+            geo_features=GEO_FEATURES,
+            geo_df=GEO_DF,
+            show_popups=show_popups,
+            patrol=st.session_state.get("patrol"),
+            show_hotspot=perm_hotspot_show,            # kalıcı hotspot görünürlüğü
+            perm_hotspot_mode="heat",
+            show_temp_hotspot=temp_hotspot_show,       # geçici hotspot görünürlüğü
+            temp_hotspot_points=temp_points,
+            add_layer_control=True,                    # LayerControl ekle
+            risk_layer_show=risk_layer_show,
+            perm_hotspot_show=perm_hotspot_show,
+            temp_hotspot_show=temp_hotspot_show,
+            risk_layer_name=risk_layer_name,
+            perm_hotspot_layer_name=perm_hotspot_layer_name,
+            temp_hotspot_layer_name=temp_hotspot_layer_name,
+        )
 
+        import folium
+        assert isinstance(m, folium.Map), f"st_folium beklediği tipte değil: {type(m)}"
+
+        # Harita çizdir
+        ret = st_folium(
+            m,
+            key="riskmap",
+            height=540,
+            width=1600,
+            returned_objects=["last_object_clicked", "last_clicked"]
+        )
+
+        # Tıklanan GEOID açıklaması
+        if ret:
+            gid, _ = resolve_clicked_gid(GEO_DF, ret)
+            if gid:
+                st.session_state["explain"] = {"geoid": gid}
+
+    else:
+        # Pydeck harita
+        if build_map_fast_deck is None:
+            st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
+            ret = None
+        else:
+            deck = build_map_fast_deck(
+                agg, GEO_DF,
+                show_poi=show_poi,
+                show_transit=show_transit,
+                patrol=st.session_state.get("patrol"),
+                show_hotspot=show_hotspot,
+                show_temp_hotspot=show_temp_hotspot,
+                temp_hotspot_points=temp_points,
+            )
+            st.pydeck_chart(deck)
+            ret = None
             # Açıklama kartı
             start_iso  = st.session_state["start_iso"]
             horizon_h  = st.session_state["horizon_h"]
