@@ -207,8 +207,8 @@ PALETTE_5: dict[str, str] = {
     "Çok Yüksek": "#FF6666",  # koyu kırmızı
     "Yüksek":     "#EF3B2C",  # kırmızı
     "Orta":       "#4A90D9",  # turuncu
-    "Düşük":      "#EF3B2C",  # mavi
-    "Çok Düşük":  "#FF6666",  # açık mavi
+    "Düşük":      "#6BAED6",  # mavi
+    "Çok Düşük":  "#C6DBEF",  # açık mavi
 }
 
 # 4'lü skala
@@ -216,14 +216,14 @@ PALETTE_4: dict[str, str] = {
     "Çok Yüksek": "#FF6666",  # koyu kırmızı
     "Yüksek":     "#EF3B2C",  # kırmızı
     "Orta":       "#4A90D9",  # turuncu
-    "Düşük":      "#EF3B2C",  # mavi
+    "Düşük":      "#6BAED6",  # mavi
 }
 
 # 3'lü skala (geriye uyumluluk)
 PALETTE_3: dict[str, str] = {
     "Yüksek":     "#EF3B2C",  # kırmızı
     "Orta":       "#4A90D9",  # turuncu
-    "Düşük":      "#EF3B2C",  # mavi
+    "Düşük":      "#6BAED6",  # mavi
 }
 
 # Not: Bazı modeller "Çok Hafif/Hafif" üretir.
