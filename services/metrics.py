@@ -72,6 +72,10 @@ def get_latest_metrics() -> Optional[Metrics]:
         with open(METRICS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
+        if not isinstance(data, dict):
+            print(f"[metrics] ❌ Invalid metrics JSON (not an object): {METRICS_FILE}")
+            return None
+
         validated = _validate_metrics(data or {})
         if validated is None:
             print(f"[metrics] ❌ Invalid metrics content in: {METRICS_FILE}")
@@ -88,7 +92,8 @@ def save_latest_metrics(auc: float, hit_rate_topk: float, brier: float) -> None:
     Eğitim tamamlandığında çağrılmalıdır.
     """
     try:
-        os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
+        dir_name = os.path.dirname(METRICS_FILE) or "."
+        os.makedirs(dir_name, exist_ok=True)
 
         payload: Metrics = Metrics(
             auc=float(auc),
@@ -100,7 +105,6 @@ def save_latest_metrics(auc: float, hit_rate_topk: float, brier: float) -> None:
         if _validate_metrics(payload) is None:
             raise ValueError("Provided metrics failed validation.")
 
-        dir_name = os.path.dirname(METRICS_FILE)
         with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tmp:
             json.dump(payload, tmp, ensure_ascii=False, indent=4)
             tmp_path = tmp.name
