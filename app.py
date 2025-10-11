@@ -359,7 +359,7 @@ if agg is not None:
         perm_hotspot_show   = st.sidebar.checkbox("Hotspot (kalıcı)", value=True)
         temp_hotspot_show   = st.sidebar.checkbox("Hotspot (geçici)", value=True)
 
-        # Katman adları (opsiyonel, constants.py ile de çekilebilir)
+        # Katman adları
         risk_layer_name         = "Tahmin (risk)"
         perm_hotspot_layer_name = "Hotspot (kalıcı)"
         temp_hotspot_layer_name = "Hotspot (geçici)"
@@ -419,6 +419,7 @@ if agg is not None:
             )
             st.pydeck_chart(deck)
             ret = None
+
             # Açıklama kartı
             start_iso  = st.session_state["start_iso"]
             horizon_h  = st.session_state["horizon_h"]
@@ -429,13 +430,12 @@ if agg is not None:
                 render_result_card(agg, info["geoid"], start_iso, horizon_h)
             else:
                 st.info("Haritada bir hücreye tıklayın veya listeden seçin; kart burada görünecek.")
-        else:
-            st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
+    # Sağ panel: risk özeti
     with col2:
         st.subheader("Risk Özeti", anchor=False)
 
-        if st.session_state["agg"] is not None:
+        if st.session_state.get("agg") is not None:
             a = st.session_state["agg"]
             kpi_expected = round(float(a["expected"].sum()), 2)
 
@@ -457,7 +457,11 @@ if agg is not None:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
         st.subheader("Top-5 kritik GEOID")
-        if st.session_state["agg"] is not None:
+        if st.session_state.get("agg") is not None:
+            # burada Top-5 GEOID tablosu vs. devam eder...
+            pass
+else:
+    st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
             def top_risky_table(df_agg: pd.DataFrame, n: int = 5, show_ci: bool = False) -> pd.DataFrame:
                 # Poisson ~%95 güven aralığı (normal approx.)
