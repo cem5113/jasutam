@@ -3,10 +3,13 @@
 from __future__ import annotations
 import json, os, sys, time
 from datetime import datetime, timedelta, timezone
-from services.metrics import save_latest_metrics
+from typing import Tuple
+
 import argparse
 import numpy as np
 import pandas as pd
+
+from services.metrics import save_latest_metrics
 
 # ───────────── Ayarlar (varsa config/settings.py’dan oku) ─────────────
 DEFAULTS = {
@@ -16,13 +19,9 @@ DEFAULTS = {
     "EVENTS_FILE":   "data/events.csv",                # app.py’nin okuduğu dosya
     "META_FILE":     "data/_metadata.json",            # rozet için
     "MODEL_VERSION": "v0.3.1",
+    "TOPK":          100,                              # HitRate@TopK için K
+    "RNG_SEED":      42,
 }
-
-auc = roc_auc_score(y_test, y_pred_proba)
-hit_rate = hit_rate_topk(y_test, y_pred_proba, k=100)
-brier = brier_score_loss(y_test, y_pred_proba)
-
-save_latest_metrics(auc, hit_rate, brier)
 
 def try_import_settings():
     try:
@@ -43,11 +42,22 @@ def now_sf_str(tz_offset_hours: int) -> str:
 
 def ensure_dirs(*paths: str):
     for p in paths:
-        os.makedirs(p, exist_ok=True)
+        if p:
+            os.makedirs(p, exist_ok=True)
 
 def save_meta(meta_path: str, meta: dict):
+    ensure_dirs(os.path.dirname(meta_path))
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
+def hit_rate_topk(y_true: np.ndarray, y_score: np.ndarray, k: int) -> float:
+    """Top-K örneğin ortalama gerçek pozitif oranı."""
+    if len(y_true) == 0:
+        return 0.0
+    k_eff = int(min(max(k, 1), len(y_true)))
+    order = np.argsort(-y_score)
+    topk_idx = order[:k_eff]
+    return float(np.mean(y_true[topk_idx]))
 
 # ───────────── 1) Veri güncelle (placeholder/sentetik) ─────────────
 def update_raw_data(raw_dir: str, out_events: str, *, tz_off: int, since_days: int = 30) -> dict:
@@ -66,7 +76,7 @@ def update_raw_data(raw_dir: str, out_events: str, *, tz_off: int, since_days: i
         old = pd.DataFrame(columns=["ts", "latitude", "longitude", "type"])
 
     n_new  = 800  # sentetik kaç olay?
-    rng    = np.random.default_rng(42)
+    rng    = np.random.default_rng(DEFAULTS["RNG_SEED"])
     now_u  = now_utc()
     start  = now_u - timedelta(days=since_days)
 
@@ -87,6 +97,7 @@ def update_raw_data(raw_dir: str, out_events: str, *, tz_off: int, since_days: i
     events = pd.concat([old, new_df], ignore_index=True)
     # Temizlik
     events = events.dropna(subset=["ts","latitude","longitude"]).sort_values("ts").reset_index(drop=True)
+    ensure_dirs(os.path.dirname(out_events))
     events.to_csv(out_events, index=False)
 
     # meta için “veri şu tarihe kadar”
@@ -111,17 +122,85 @@ def build_features(out_dir: str) -> dict:
         f.write(f"features built at {datetime.utcnow().isoformat()}Z\n")
     return {"features_ok": True}
 
-# ───────────── 3) Model eğit (placeholder) ─────────────
-def train_model(out_dir: str) -> dict:
+# ───────────── 3) Model eğit + 3.5) Metrikleri hesapla ─────────────
+def train_and_evaluate(events_csv: str, topk: int) -> Tuple[float, float, float]:
     """
-    Üretimde: gerçek eğitim ve model kaydı.
-    Şimdilik yalnızca bir “model_ok” dosyası bırakıyoruz.
+    Basit bir örnek eğitim/değerlendirme:
+    - Hedef (binary): {burglary, robbery} = 1, diğer tipler = 0
+    - Özellikler: hour-of-day (sin/cos), type (one-hot)
+    - Model: sklearn LogisticRegression (yoksa frekans tabanlı tahmin)
+    Döndürür: (auc, hit_rate_topk, brier)
     """
-    ensure_dirs(out_dir)
-    with open(os.path.join(out_dir, "model_ok.txt"), "w", encoding="utf-8") as f:
-        f.write(f"trained at {datetime.utcnow().isoformat()}Z\n")
-    last_trained_at = datetime.utcnow().strftime("%Y-%m-%d")
-    return {"last_trained_at": last_trained_at}
+    df = pd.read_csv(events_csv)
+    if df.empty:
+        # hiç veri yoksa metrikleri 0 döndür
+        return 0.0, 0.0, 0.0
+
+    # Hedef
+    y = df["type"].isin(["burglary", "robbery"]).astype(int).to_numpy()
+
+    # Zaman özellikleri
+    hrs = pd.to_datetime(df["ts"], utc=True, errors="coerce").dt.hour.fillna(0).astype(int).to_numpy()
+    hsin = np.sin(2 * np.pi * hrs / 24.0)
+    hcos = np.cos(2 * np.pi * hrs / 24.0)
+
+    # Type one-hot
+    types = pd.get_dummies(df["type"].astype(str), prefix="t", drop_first=False)
+    X = np.c_[hsin, hcos, types.to_numpy()]
+
+    # Train/test ayır
+    n = len(y)
+    if n < 50:
+        # çok az veri: frekans tabanı
+        return _metrics_via_frequency(types, y, topk)
+
+    idx = np.arange(n)
+    rng = np.random.default_rng(DEFAULTS["RNG_SEED"])
+    rng.shuffle(idx)
+    cut = int(0.8 * n)
+    tr, te = idx[:cut], idx[cut:]
+
+    X_tr, X_te = X[tr], X[te]
+    y_tr, y_te = y[tr], y[te]
+
+    y_proba_te = None
+    try:
+        # Sklearn ile lojistik regresyon
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import roc_auc_score, brier_score_loss
+
+        clf = LogisticRegression(max_iter=500, solver="liblinear")
+        clf.fit(X_tr, y_tr)
+        y_proba_te = clf.predict_proba(X_te)[:, 1]
+
+        auc = float(roc_auc_score(y_te, y_proba_te)) if len(np.unique(y_te)) > 1 else 0.5
+        brier = float(brier_score_loss(y_te, y_proba_te))
+        hit = float(hit_rate_topk(y_te, y_proba_te, k=topk))
+
+        return auc, hit, brier
+
+    except Exception:
+        # Sklearn yoksa frekans tabanı (type'a göre olasılık)
+        return _metrics_via_frequency(types.iloc[te], y_te, topk)
+
+def _metrics_via_frequency(types_df: pd.DataFrame, y_true: np.ndarray, topk: int) -> Tuple[float, float, float]:
+    """
+    Yedek (sklearn yok): her type için pozitif oranını olasılık olarak kullan.
+    """
+    from sklearn.metrics import roc_auc_score, brier_score_loss  # çoğu ortamda mevcut; yoksa try/except ekleyebilirsin
+    # Eğitim frekansını tüm veri üzerinde yaklaşıkla: p(positive|type)
+    probs_by_type = (pd.concat([types_df.reset_index(drop=True), pd.Series(y_true, name="y")], axis=1)
+                     .groupby(types_df.columns.tolist())["y"].mean().to_dict())
+    # satır satır olasılık üret
+    def row_prob(row):
+        key = tuple(int(v) for v in row.tolist())
+        return float(probs_by_type.get(key, np.mean(y_true)))
+    y_proba = types_df.apply(row_prob, axis=1).to_numpy(dtype=float)
+
+    auc = float(roc_auc_score(y_true, y_proba)) if len(np.unique(y_true)) > 1 else 0.5
+    brier = float(brier_score_loss(y_true, y_proba))
+    hit = float(hit_rate_topk(y_true, y_proba, k=topk))
+    return auc, hit, brier
 
 # ───────────── 4) Tahmin/çıktı üret (opsiyonel placeholder) ─────────────
 def produce_outputs(out_dir: str) -> dict:
@@ -135,6 +214,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Run full pipeline")
     p.add_argument("--since-days", type=int, default=30, help="Sentetik veri için kaç gün geriden üretilecek")
     p.add_argument("--dry-run", action="store_true", help="Dosyaları yazma (sadece dene)")
+    p.add_argument("--topk", type=int, default=DEFAULTS["TOPK"], help="HitRate@TopK için K")
     return p.parse_args()
 
 def main():
@@ -147,6 +227,7 @@ def main():
     events_file = DEFAULTS["EVENTS_FILE"]
     meta_file = DEFAULTS["META_FILE"]
     model_version = DEFAULTS["MODEL_VERSION"]
+    topk = int(args.topk)
 
     print("▶ Full pipeline başlıyor…")
     t0 = time.time()
@@ -159,9 +240,14 @@ def main():
     fstats = build_features(out_dir)
     print("  ✓ features üretildi")
 
-    # 3) Model
-    mstats = train_model(out_dir)
-    print("  ✓ model eğitildi")
+    # 3) Model + 3.5) Değerlendirme (METRICS)
+    auc, hit_rate, brier = train_and_evaluate(events_file, topk=topk)
+    print(f"  ✓ metrics: AUC={auc:.3f}  HitRate@{topk}={hit_rate:.3f}  Brier={brier:.3f}")
+
+    # 3.6) JSON'a atomik METRICS kaydı (app.py KPI için)
+    if not args.dry_run:
+        save_latest_metrics(auc, hit_rate, brier)
+        print("  ✓ latest_metrics.json yazıldı")
 
     # 4) Çıktılar
     ostats = produce_outputs(out_dir)
@@ -171,12 +257,15 @@ def main():
     meta = {
         "data_upto":       stats["data_upto_sf"],              # YYYY-MM-DD (SF)
         "model_version":   model_version,
-        "last_trained_at": mstats["last_trained_at"],          # YYYY-MM-DD (UTC baz)
+        "last_trained_at": datetime.utcnow().strftime("%Y-%m-%d"),  # YYYY-MM-DD (UTC)
         "updated_at_sf":   now_sf_str(tz_off),
     }
-    save_meta(meta_file, meta)
-    print(f"  ✓ meta yazıldı → {meta_file}")
+    if not args.dry_run:
+        save_meta(meta_file, meta)
+        print(f"  ✓ meta yazıldı → {meta_file}")
+
     print(f"⏱  tamamlandı: {time.time()-t0:.1f}s")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
