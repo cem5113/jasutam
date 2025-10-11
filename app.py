@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
+from zipfile import ZipFile, BadZipFile
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -676,17 +677,39 @@ if sekme == "Operasyon":
         label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
         st.subheader(label, anchor=False)
 
-        # Artifact CSV sabiti
-        ARTIFACT_NAME = "sf-crime-pipeline-output*"
-        ARTIFACT_CSV  = f"data/artifacts/{ARTIFACT_NAME}.csv"  
+        # ───────────────────────────────────────────────────────────────
+        # Artifact ZIP sabiti
+        ARTIFACT_NAME = "sf-crime-pipeline-output"
+        ARTIFACT_PATH = "/mount/src/jasutam/sf-crime-pipeline-output.zip"
+        # ───────────────────────────────────────────────────────────────
         
-        with st.spinner("Artifact CSV okunuyor..."):
+        with st.spinner("Artifact ZIP okunuyor..."):
             try:
-                df = pd.read_csv(ARTIFACT_CSV)
-                if df.empty:
+                # ZIP içinden metrics_*.csv dosyalarını topla
+                tables = []
+                chosen_source = None
+                with ZipFile(ARTIFACT_PATH, "r") as zf:
+                    names = [n for n in zf.namelist()
+                             if n.lower().endswith(".csv") and "metrics_" in n.lower()]
+                    if not names:
+                        raise FileNotFoundError("ZIP içinde metrics_*.csv bulunamadı")
+        
+                    for name in names:
+                        try:
+                            data = zf.read(name)
+                            df = pd.read_csv(io.BytesIO(data))
+                            if df is None or df.empty:
+                                continue
+                            df = df.copy()
+                            df["source_path"] = name
+                            tables.append(df)
+                        except Exception:
+                            continue
+        
+                if not tables:
                     m = {}
                 else:
-                    cand = df.copy()
+                    cand = pd.concat(tables, ignore_index=True, sort=False)
         
                     def best(col, asc=False):
                         return (
@@ -695,6 +718,7 @@ if sekme == "Operasyon":
                             else None
                         )
         
+                    # Öncelik: HitRate@TopK > PR-AUC > AUC > (düşük) Brier
                     row = (
                         best("hit_rate_topk", False)
                         or best("pr_auc", False)
@@ -702,9 +726,11 @@ if sekme == "Operasyon":
                         or best("brier", True)
                         or cand.iloc[0]
                     )
+                    chosen_source = row.get("source_path", None)
         
                     m = {}
-                    for col in ["model_name", "group", "pr_auc", "auc", "brier", "hit_rate_topk", "timestamp"]:
+                    for col in ["model_name", "group", "pr_auc", "auc", "brier",
+                                "hit_rate_topk", "timestamp"]:
                         if col in row.index:
                             val = row[col]
                             if isinstance(val, float) and pd.isna(val):
@@ -715,19 +741,20 @@ if sekme == "Operasyon":
                         m["selection_metric"] = "hit_rate_topk"
                         m["selection_value"] = float(row["hit_rate_topk"])
                     elif "pr_auc" in row.index and pd.notna(row["pr_auc"]):
-                        m["selection_metric"] = "pr_auc"
-                        m["selection_value"] = float(row["pr_auc"])
+                        m["selection_metric"] = "pr_auc"; m["selection_value"] = float(row["pr_auc"])
                     elif "auc" in row.index and pd.notna(row["auc"]):
-                        m["selection_metric"] = "auc"
-                        m["selection_value"] = float(row["auc"])
+                        m["selection_metric"] = "auc";  m["selection_value"] = float(row["auc"])
                     elif "brier" in row.index and pd.notna(row["brier"]):
-                        m["selection_metric"] = "brier"
-                        m["selection_value"] = float(row["brier"])
+                        m["selection_metric"] = "brier"; m["selection_value"] = float(row["brier"])
         
-                    m["source_path"] = ARTIFACT_CSV
+                    m["source_path"] = f"{ARTIFACT_NAME}.zip::{chosen_source}" if chosen_source else ARTIFACT_PATH
+        
+            except (FileNotFoundError, BadZipFile) as e:
+                m = {}
+                st.caption(f"⚠️ Artifact bulunamadı/bozuk: {e}")
             except Exception as e:
                 m = {}
-                st.caption(f"⚠️ Metrics CSV okunamadı: {e}")
+                st.caption(f"⚠️ Artifact okuma hatası: {e}")
         
         if m:
             pr_auc = m.get("pr_auc")
@@ -756,8 +783,7 @@ if sekme == "Operasyon":
                 meta_bits.append(f"TS: {m['timestamp']}")
             st.caption(" · ".join(meta_bits))
         else:
-            st.caption(f"📊 Metrics CSV bulunamadı veya boş: `{ARTIFACT_CSV}`")
-
+            st.caption(f"📊 Artifact içinde metrics_*.csv bulunamadı veya boş: `{ARTIFACT_PATH}`")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
