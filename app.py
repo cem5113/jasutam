@@ -32,19 +32,8 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from components.last_update import show_last_update_badge
-
 from services.metrics import get_latest_metrics, METRICS_FILE
-import os
 
-metrics = get_latest_metrics()
-if metrics:
-    col1, col2, col3 = st.columns(3)
-    if metrics.get("auc") is not None:
-        col1.metric("AUC (7g)", f"{metrics['auc']:.3f}")
-    if metrics.get("hit_rate_topk") is not None:
-        col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
-    if metrics.get("brier") is not None:
-        col3.metric("Brier Score", f"{metrics['brier']:.3f}")
 else:
     # Teşhis amaçlı; istersen bu uyarıyı silebilirsin
     st.caption("📊 KPI için ölçüm dosyası bulunamadı: " + METRICS_FILE)
@@ -357,6 +346,19 @@ def top_risky_table(
 st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
+
+metrics = get_latest_metrics()
+if metrics:
+    col1, col2, col3 = st.columns(3)
+    if metrics.get("auc") is not None:
+        col1.metric("AUC (7g)", f"{metrics['auc']:.3f}")
+    if metrics.get("hit_rate_topk") is not None:
+        col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
+    if metrics.get("brier") is not None:
+        col3.metric("Brier Score", f"{metrics['brier']:.3f}")
+else:
+    # İstersen bu teşhis satırını kaldırabilirsin
+    st.caption(f"📊 KPI için ölçüm dosyası bulunamadı: {METRICS_FILE}")
 
 # Veri sonu
 try:
