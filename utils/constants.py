@@ -18,11 +18,6 @@ CATEGORIES = ["Assault", "Burglary", "Robbery", "Theft", "Vandalism", "Vehicle T
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 SEASONS = ["Winter", "Spring", "Summer", "Autumn"]
 
-# ——— Kategori → kolon eşleme ———
-# Araç hırsızlığı ayrı kolon olarak üretilmiyorsa (şu an yok),
-# filtre işlesin diye "theft"e yönlendiriyoruz. İleride "vehicle_theft"
-# kolonu eklersen sadece bu satırı güncelle:
-#   "Vehicle Theft": ["vehicle_theft"]
 CATEGORY_TO_KEYS = {
     "Assault": ["assault"],
     "Burglary": ["burglary"],
