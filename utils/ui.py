@@ -200,60 +200,72 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
     return f"{start:%H:%M}–{t2:%H:%M}"
 
 # ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
-PALETTE_5 = {
-    "Çok Yüksek": "#b10026",
-    "Yüksek":     "#e31a1c",
-    "Orta":       "#fc8d59",
-    "Düşük":      "#74add1",
-    "Çok Düşük":  "#a6cee3",
+# ───────────────────────────── PALET / RENK EŞLEYİCİ (REVİZE) ─────────────────────────────
+# 5'li skala (en kapsamlı)
+PALETTE_5: dict[str, str] = {
+    "Çok Yüksek": "#b10026",  # koyu kırmızı
+    "Yüksek":     "#e31a1c",  # kırmızı
+    "Orta":       "#fc8d59",  # turuncu
+    "Düşük":      "#74add1",  # mavi
+    "Çok Düşük":  "#a6cee3",  # açık mavi
 }
-PALETTE_4 = {
+
+# 4'lü skala
+PALETTE_4: dict[str, str] = {
     "Çok Yüksek": "#b10026",
     "Yüksek":     "#e31a1c",
     "Orta":       "#fc8d59",
     "Düşük":      "#1f77b4",
 }
-PALETTE_3 = {  # geriye uyumluluk (eski 3'lü/4'lüler)
+
+# 3'lü skala (geriye uyumluluk)
+PALETTE_3: dict[str, str] = {
     "Yüksek": "#d62728",
     "Orta":   "#ff7f0e",
     "Düşük":  "#1f77b4",
-    "Hafif":  "#1f77b4",
 }
 
-_TIER_ALIASES = {
-    "cok yuksek": "Çok Yüksek",
-    "çok yüksek": "Çok Yüksek",
-    "yuksek":     "Yüksek",
-    "yüksek":     "Yüksek",
+# Not: Bazı modeller "Çok Hafif/Hafif" üretir.
+# Bu blokta bunları "Çok Düşük/Düşük" ile eşliyoruz (renk karşılığı hazır).
+_TIER_ALIASES: dict[str, str] = {
+    # yüksek aile
+    "cok yuksek": "Çok Yüksek", "çok yüksek": "Çok Yüksek",
+    "yuksek":     "Yüksek",     "yüksek":     "Yüksek",
+    # orta
     "orta":       "Orta",
-    "dusuk":      "Düşük",
-    "düşük":      "Düşük",
-    "hafif":      "Düşük",
-    "cok dusuk":  "Çok Düşük",
-    "çok düşük":  "Çok Düşük",
-    "cok hafif":  "Çok Düşük",
-    "çok hafif":  "Çok Düşük",
+    # düşük aile (iki terminolojiyi tekleştir)
+    "dusuk":      "Düşük",      "düşük":      "Düşük",
+    "hafif":      "Düşük",      # ≈ Düşük
+    "cok hafif":  "Çok Düşük",  "çok hafif":  "Çok Düşük",
+    "cok dusuk":  "Çok Düşük",  "çok düşük":  "Çok Düşük",
 }
 
 def _normalize_tier(t: str | None) -> str | None:
+    """Etiketi normalize et (aksan/küçük-büyük/boşluk farklılıklarına dayanıklı)."""
     if t is None:
         return None
     key = str(t).strip()
     low = key.lower()
     return _TIER_ALIASES.get(low, key)
 
-def _pick_palette_from_labels(labels: list[str]) -> dict:
-    """DataFrame'den gelen etiketlere göre uygun paleti seç (5→4→3)."""
+def _pick_palette_from_labels(labels: list[str]) -> dict[str, str]:
+    """
+    DataFrame'deki etiketlere göre en uygun paleti seç.
+    Öncelik: 5'li → 4'lü → 3'lü.
+    """
     norm = {_normalize_tier(x) for x in labels if x is not None}
-    if {"Çok Düşük","Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):
+    if {"Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"}.issubset(norm):
         return PALETTE_5
-    if {"Düşük","Orta","Yüksek","Çok Yüksek"}.issubset(norm):
+    if {"Düşük", "Orta", "Yüksek", "Çok Yüksek"}.issubset(norm):
         return PALETTE_4
     return PALETTE_3
 
-def color_for_tier(tier: str, palette: dict | None = None) -> str:
-    """Tier → renk. Varsayılan: birleşik paletten ara, yoksa açık maviye düş."""
-    pal_merged = PALETTE_5 | PALETTE_4 | PALETTE_3
+def color_for_tier(tier: str, palette: dict[str, str] | None = None) -> str:
+    """
+    Tier → HEX renk. Palet belirtilmezse birleşik havuzdan bakar,
+    eşleşme yoksa açık mavi (#9ecae1) döner.
+    """
+    pal_merged: dict[str, str] = {**PALETTE_5, **PALETTE_4, **PALETTE_3}
     pal = palette or pal_merged
     t = _normalize_tier(tier)
     return pal.get(t, "#9ecae1")
@@ -263,8 +275,8 @@ def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
     out = df[[lat_col, lon_col]].copy()
     out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
     out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
-    return out.replace([np.inf, -np.inf], np.nan).dropna()
-
+    return out.replace([np.inf, -np.inf], np.nan).dropna()-
+    
 # ───────────────────────────── SONUÇ KARTI ─────────────────────────────
 def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
     if df_agg is None or df_agg.empty or geoid is None:
