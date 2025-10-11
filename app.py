@@ -12,6 +12,10 @@ import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
+import json
+import streamlit as st
+from services.metrics import update_from_csv
+
 # ── Yerel paket yolları ─────────────────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -327,6 +331,19 @@ def top_risky_table(
     df["E[olay] (λ)"] = df["expected"].round(2)
     drop = ["expected"] + (["nr_boost"] if "nr_boost" in df.columns else [])
     return df.drop(columns=drop)
+
+    def get_cfg(key: str, default: str | None = None) -> str | None:
+        try:
+            import streamlit as _st
+            if key in _st.secrets:
+                v = str(_st.secrets[key]).strip()
+                if v:
+                    return v
+        except Exception:
+            pass
+        v = os.environ.get(key, "")
+        v = v.strip() if isinstance(v, str) else v
+        return v or default
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UI: Sayfa & Başlık
@@ -705,12 +722,17 @@ if sekme == "Operasyon":
         st.subheader(label, anchor=False)
 
         # 1) Artifact'tan tek seferlik otomatik güncelle + manuel yenile butonu
+        if "_metrics_refreshed_once" not in st.session_state:
+            st.session_state["_metrics_refreshed_once"] = False
+        
         should_refresh = (not st.session_state["_metrics_refreshed_once"]) or btn_refresh_metrics
         if should_refresh:
             with st.spinner("Artifact'tan metrikler çekiliyor..."):
                 try:
-                    hit_col_env = os.environ.get("SUTAM_HIT_COL")       # örn: "hit_rate@100"
-                    prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")  # opsiyonel (örn. "stacking")
+                    # örn. SUTAM_HIT_COL="hit_rate@100", SUTAM_METRICS_GROUP="stacking"
+                    hit_col_env = get_cfg("SUTAM_HIT_COL") or None
+                    prefer_grp  = get_cfg("SUTAM_METRICS_GROUP") or None
+        
                     update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
                     st.session_state["_metrics_refreshed_once"] = True
                 except FileNotFoundError:
