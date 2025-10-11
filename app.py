@@ -1,4 +1,3 @@
-# app.py
 from __future__ import annotations
 
 import os, sys
@@ -32,7 +31,7 @@ try:
 except ImportError:
     from utils.ui import render_day_hour_heatmap
 
-# Pydeck yardımcıları: ayrı modülde olmalı; yoksa None
+# Pydeck yardımcıları
 try:
     from utils.deck import build_map_fast_deck
 except ImportError:
@@ -70,16 +69,15 @@ except Exception:
             df = df.rename(columns={"lon": "longitude"})
         return df
 
-# ── Sayfa ayarı: Streamlit'te en üstte olmalı
+# ── Sayfa ayarı
 st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 
-# ── Başlık ve "Son güncelleme" rozetini göster (A: başlığa dokunma)
+# ── Başlık ve rozet
 st.title("SUTAM: Suç Tahmin Modeli")
 
 try:
     events_df = load_events("data/events.csv")
-    # Boş olsa bile state'e yaz (raporlar güvenli çalışsın)
     st.session_state["events_df"] = events_df if isinstance(events_df, pd.DataFrame) else None
     st.session_state["events"] = st.session_state["events_df"]
 
@@ -118,21 +116,24 @@ if HAS_REPORTS:
 sekme = st.sidebar.radio("", options=sekme_options, index=0, horizontal=True)
 st.sidebar.divider()
 
-# ---- GÜNCELLENEN KISIM ----
+# ---- AYARLAR ----
 st.sidebar.header("Devriye Parametreleri")
 engine = st.sidebar.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
 
 # Harita katmanları
-show_popups  = st.sidebar.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
+show_popups = st.sidebar.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
+# POI/Transit şu an kullanılmadığı için güvenli varsayılanlar:
+show_poi = False
+show_transit = False
 
 # Grafik kapsamı (istatistikler için)
 scope = st.sidebar.radio("Grafik kapsamı", ["Tüm şehir", "Seçili hücre"], index=0)
 
-# Hotspot ayarları (B: geçici hotspot akışına dokunma)
-show_hotspot      = True    # kalıcı hotspot katmanı açık
-show_temp_hotspot = True    # geçici hotspot katmanı açık
+# Hotspot ayarları (Geçici hotspot akışına dokunma)
+show_hotspot      = True
+show_temp_hotspot = True
 
-# D) Tek kategori seçimi → hem tahmin hem hotspot
+# Tek kategori seçimi → hem tahmin hem hotspot
 selected_category = st.sidebar.selectbox(
     "Kategori (tahmin & hotspot)",
     options=["(Tüm suçlar)"] + CATEGORIES,
@@ -140,18 +141,17 @@ selected_category = st.sidebar.selectbox(
     help="Tahmin ve hotspot katmanları aynı kategoriye göre filtrelenir."
 )
 
-# C) Zaman ufku — kullanıcı diliyle
-ufuk = st.sidebar.radio("Zaman Aralığı (şimdiden)",
-                        options=["0–24 saat", "72 saat", "1 hafta"],
-                        index=0, horizontal=True)
+# Zaman aralığı
+ufuk = st.sidebar.radio(
+    "Zaman Aralığı (şimdiden)",
+    options=["0–24 saat", "72 saat", "1 hafta"],
+    index=0, horizontal=True
+)
 max_h, step = (24, 1) if ufuk == "0–24 saat" else (72, 3) if ufuk == "72 saat" else (7*24, 24)
 start_h, end_h = st.sidebar.slider("Saat filtresi", min_value=0, max_value=max_h, value=(0, max_h), step=step)
 
-# D) Tek kategoriden filters sözlüğü
-if selected_category == "(Tüm suçlar)":
-    filters = {"cats": None}
-else:
-    filters = {"cats": [selected_category]}
+# Kategori filtresi
+filters = {"cats": None if selected_category == "(Tüm suçlar)" else [selected_category]}
 
 show_advanced = st.sidebar.checkbox("Gelişmiş metrikleri göster (analist)", value=False)
 
@@ -164,7 +164,7 @@ cell_minutes = st.sidebar.number_input("Hücre başına ort. kontrol (dk)", min_
 colA, colB = st.sidebar.columns(2)
 btn_predict = colA.button("Tahmin et")
 btn_patrol  = colB.button("Devriye öner")
-# ---- GÜNCELLENEN KISIM ----
+# -----------------
 
 # ── State
 if "agg" not in st.session_state:
@@ -206,7 +206,7 @@ if sekme == "Operasyon":
                 "events": events_df,
             })
 
-            # Uzun ufuk referansı (raporlar sekmesi için)
+            # Uzun ufuk referansı (raporlar için)
             try:
                 long_start_iso = (
                     datetime.utcnow()
@@ -225,7 +225,7 @@ if sekme == "Operasyon":
 
         agg = st.session_state["agg"]
 
-        # Geçici hotspot veri akışı (B: kalsın fakat tek kategori ile filtrelensin)
+        # Geçici hotspot verisi (tek kategori ile filtreli)
         events_all = st.session_state.get("events")
         lookback_h = int(np.clip(2 * st.session_state.get("horizon_h", 24), 24, 72))
 
@@ -236,7 +236,6 @@ if sekme == "Operasyon":
             ev_recent_df["ts"] = pd.to_datetime(ev_recent_df[_ts], utc=True, errors="coerce") if _ts else pd.NaT
             if "ts" in ev_recent_df.columns:
                 ev_recent_df = ev_recent_df[ev_recent_df["ts"] >= (pd.Timestamp.utcnow() - pd.Timedelta(hours=lookback_h))]
-            # D) tek kategori filtresi
             if selected_category != "(Tüm suçlar)" and "type" in ev_recent_df.columns:
                 ev_recent_df = ev_recent_df[ev_recent_df["type"] == selected_category]
             if "latitude" not in ev_recent_df.columns and "lat" in ev_recent_df.columns:
@@ -266,7 +265,7 @@ if sekme == "Operasyon":
         else:
             temp_points = pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
-        # ev_recent boşsa: üst risk hücrelerinden sentetik ısı üret (fallback)
+        # Fallback: üst risk hücrelerinden sentetik ısı
         if show_temp_hotspot and temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
             topn = 80
             tmp = (
@@ -283,52 +282,18 @@ if sekme == "Operasyon":
 
         if agg is not None:
             if engine == "Folium":
-                lookback_h = int(np.clip(2 * st.session_state.get("horizon_h", 24), 24, 72))
-
-                source = st.session_state.get("events_df", None)
-                if source is None:
-                    try:
-                        source = events_df
-                    except NameError:
-                        source = None
-
-                if isinstance(source, pd.DataFrame) and not source.empty:
-                    ev_recent = source.copy()
-                    ts_col = "ts" if "ts" in ev_recent.columns else ("timestamp" if "timestamp" in ev_recent.columns else None)
-                    if ts_col is None:
-                        ev_recent = pd.DataFrame(columns=["latitude","longitude","weight"])
-                    else:
-                        ev_recent["timestamp"] = pd.to_datetime(ev_recent[ts_col], utc=True, errors="coerce")
-                        ev_recent = ev_recent.dropna(subset=["timestamp"])
-                        if "latitude" not in ev_recent.columns and "lat" in ev_recent.columns:
-                            ev_recent = ev_recent.rename(columns={"lat": "latitude"})
-                        if "longitude" not in ev_recent.columns and "lon" in ev_recent.columns:
-                            ev_recent = ev_recent.rename(columns={"lon": "longitude"})
-                        cutoff = pd.Timestamp.utcnow() - pd.Timedelta(hours=lookback_h)
-                        ev_recent = ev_recent[
-                            (ev_recent["timestamp"] >= cutoff)
-                            & ev_recent["latitude"].notna()
-                            & ev_recent["longitude"].notna()
-                        ]
-                        if "weight" not in ev_recent.columns:
-                            ev_recent["weight"] = 1.0
-                else:
-                    ev_recent = pd.DataFrame(columns=["latitude","longitude","weight"])
-
+                # Folium harita
                 m = build_map_fast(
                     df_agg=agg,
                     geo_features=GEO_FEATURES,
                     geo_df=GEO_DF,
                     show_popups=show_popups,
                     patrol=st.session_state.get("patrol"),
-
                     show_hotspot=show_hotspot,
                     perm_hotspot_mode="heat",
-
                     show_temp_hotspot=show_temp_hotspot,
                     temp_hotspot_points=temp_points,
                 )
-
                 import folium
                 assert isinstance(m, folium.Map), f"st_folium beklediği tipte değil: {type(m)}"
 
@@ -342,8 +307,9 @@ if sekme == "Operasyon":
                         st.session_state["explain"] = {"geoid": gid}
 
             else:
+                # Pydeck harita
                 if build_map_fast_deck is None:
-                    st.error("Pydeck harita modülü bulunamadı (utils/deck.py yüklenemedi). Lütfen Folium motorunu seçin.")
+                    st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
                     ret = None
                 else:
                     deck = build_map_fast_deck(
@@ -354,11 +320,6 @@ if sekme == "Operasyon":
                         show_hotspot=show_hotspot,
                         show_temp_hotspot=show_temp_hotspot,
                         temp_hotspot_points=temp_points,
-                        risk_layer_show=True,
-                        perm_hotspot_show=True,
-                        temp_hotspot_show=True,
-                        selected_type=None,          # tek seçimli kategori geldiğinde buraya kolon adını ver
-                        perm_hotspot_mode="heat",    # veya "markers"
                     )
                     st.pydeck_chart(deck)
                     ret = None
@@ -366,8 +327,6 @@ if sekme == "Operasyon":
             # Açıklama kartı
             start_iso  = st.session_state["start_iso"]
             horizon_h  = st.session_state["horizon_h"]
-
-            # C) ufuk notu
             st.caption("Ufuk: seçilen saat aralığı (SF).")
 
             info = st.session_state.get("explain")
@@ -386,18 +345,18 @@ if sekme == "Operasyon":
             kpi_expected = round(float(a["expected"].sum()), 2)
             high = int((a["tier"] == "Yüksek").sum())
             mid  = int((a["tier"] == "Orta").sum())
-            low  = int((a["tier"] == "Düşük").sum())  # F: tutarlılık
+            # "Düşük" veya "Hafif" gelebilir → birleşik say
+            low  = int(((a["tier"] == "Düşük") | (a["tier"] == "Hafif")).sum())
 
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
                 ("Yüksek",               high,         "Yüksek öncelikli hücre sayısı"),
                 ("Orta",                 mid,          "Orta öncelikli hücre sayısı"),
-                ("Düşük",                low,          "Düşük öncelikli hücre sayısı"),
+                ("Düşük",                low,          "Düşük/Hafif öncelikli hücre sayısı"),
             ])
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
-        # F) Top-5 kritik tablo
         st.subheader("Top-5 kritik GEOID")
         if st.session_state["agg"] is not None:
 
@@ -420,14 +379,14 @@ if sekme == "Operasyon":
                 lam = tab["expected"].to_numpy()
                 tab["P(≥1)%"] = [round(prob_ge_k(l, 1) * 100, 1) for l in lam]
 
-                # C) Saat aralığı (SF)
+                # Saat aralığı (SF)
                 start_iso_val = st.session_state.get("start_iso")
                 try:
                     if start_iso_val:
                         _start = pd.to_datetime(start_iso_val)
                         _end   = _start + pd.to_timedelta(st.session_state.get("horizon_h", 0), unit="h")
-                        start_hh = _start.strftime("%H:00")
-                        end_hh   = _end.strftime("%H:00")
+                        start_hh = _start.strftime("%H:%M")
+                        end_hh   = _end.strftime("%H:%M")
                         tab["Saat"] = f"{start_hh}–{end_hh} (SF)"
                     else:
                         tab["Saat"] = "-"
