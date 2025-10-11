@@ -340,21 +340,6 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-metrics = get_latest_metrics_from_artifact(
-    hit_col=os.environ.get("SUTAM_HIT_COL"),
-    prefer_group=os.environ.get("SUTAM_METRICS_GROUP"),
-)
-if metrics:
-    col1, col2, col3 = st.columns(3)
-    if metrics.get("auc") is not None:
-        col1.metric("AUC (7g)", f"{metrics['auc']:.3f}")
-    if metrics.get("hit_rate_topk") is not None:
-        col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
-    if metrics.get("brier") is not None:
-        col3.metric("Brier Score", f"{metrics['brier']:.3f}")
-else:
-    st.caption(f"📊 Artifact içinde metrics_* bulunamadı. Kaynak: {artifact_location()}")
-
 # Veri sonu
 try:
     _events_df = load_events_safe()
