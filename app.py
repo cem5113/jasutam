@@ -6,6 +6,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import time
+import folium
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
@@ -126,7 +127,6 @@ try:
     events_df = load_events("data/events.csv")
     st.session_state["events_df"] = events_df if isinstance(events_df, pd.DataFrame) else None
     st.session_state["events"] = st.session_state["events_df"]
-
     if isinstance(events_df, pd.DataFrame) and not events_df.empty and "ts" in events_df.columns:
         data_upto_val = pd.to_datetime(events_df["ts"]).max().date().isoformat()
     else:
@@ -138,11 +138,11 @@ except Exception:
 
 show_last_update_badge(
     app_name="SUTAM",
-    data_upto=data_upto_val,           
-    model_version=MODEL_VERSION,        
-    last_train=MODEL_LAST_TRAIN,       
+    data_upto=data_upto_val,
+    model_version=MODEL_VERSION,
+    last_train=MODEL_LAST_TRAIN,
     daily_update_hour_sf=19,
-    show_times=False,                  
+    show_times=False,
     tz_label="SF",
     show_actions=True
 )
@@ -181,7 +181,7 @@ show_transit = False
 # Grafik kapsamı (istatistikler için)
 scope = st.sidebar.radio("Grafik kapsamı", ["Tüm şehir", "Seçili hücre"], index=0)
 
-# Hotspot ayarları
+# Hotspot ayarları (sidebar’da değil, harita üstü kontrol kullanılacak)
 show_hotspot      = True
 show_temp_hotspot = True
 
@@ -331,14 +331,13 @@ if sekme == "Operasyon":
         else:
             temp_points = pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
-        # Fallback: üst risk hücrelerinden sentetik ısı (→ BURADA normalize ET!)
+        # Fallback: üst risk hücrelerinden sentetik ısı
         if show_temp_hotspot and temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
-            topn = 80
             agg2 = ensure_keycol(agg, KEY_COL)
             geo2 = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
             try:
                 tmp = (
-                    agg2.nlargest(topn, "expected")
+                    agg2.nlargest(80, "expected")
                         .merge(geo2[[KEY_COL, "centroid_lat", "centroid_lon"]], on=KEY_COL, how="left")
                         .dropna(subset=["centroid_lat", "centroid_lon"])
                 )
@@ -362,16 +361,16 @@ if sekme == "Operasyon":
                         geo_df=GEO_DF,
                         show_popups=show_popups,
                         patrol=st.session_state.get("patrol"),
-                
+
                         # katman üretimi:
-                        show_hotspot=show_hotspot,
-                        perm_hotspot_mode="heat",          # "markers" da olabilir
-                        show_temp_hotspot=show_temp_hotspot,
+                        show_hotspot=True,
+                        perm_hotspot_mode="heat",
+                        show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
-                
-                        # sadece HARİTA İÇİN LayerControl; sidebar yok
-                        add_layer_control=True,            # harita üstünde katman düğmesi çıkar
-                        risk_layer_show=True,              # başlangıçta görünür
+
+                        # harita içi LayerControl (varsa bu parametrelerle)
+                        add_layer_control=True,
+                        risk_layer_show=True,
                         perm_hotspot_show=True,
                         temp_hotspot_show=True,
                         risk_layer_name="Tahmin (risk)",
@@ -379,42 +378,43 @@ if sekme == "Operasyon":
                         temp_hotspot_layer_name="Hotspot (geçici)",
                     )
                 except TypeError:
-                    # Eski build_map_fast imzası için geri düş (LayerControl parametreleri yoksa)
+                    # Eski build_map_fast imzası için fallback
                     m = build_map_fast(
                         df_agg=agg,
                         geo_features=GEO_FEATURES,
                         geo_df=GEO_DF,
                         show_popups=show_popups,
                         patrol=st.session_state.get("patrol"),
-                        show_hotspot=show_hotspot,
+                        show_hotspot=True,
                         perm_hotspot_mode="heat",
-                        show_temp_hotspot=show_temp_hotspot,
+                        show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
                     )
-                
-                # render et ve tıklanan hücreyi yakala
-                ret = st_folium(
-                    m,
-                    key="riskmap",
-                    height=540,
-                    width=1600,  # istersen kaldır/azalt
-                    returned_objects=["last_object_clicked", "last_clicked"],
-                )
-                if ret:
-                    gid, _ = resolve_clicked_gid(GEO_DF, ret)
-                    if gid:
-                        st.session_state["explain"] = {"geoid": gid}
 
-                
-                # render et ve tıklanan hücreyi yakala
+                # San Francisco merkez + zoom (mümkünse)
+                try:
+                    if isinstance(m, folium.Map):
+                        m.location = [37.7749, -122.4194]
+                        m.zoom_start = 12
+                except Exception:
+                    pass
+
+                # build_map_fast eklemediyse LayerControl'ü biz ekleyelim
+                try:
+                    has_lc = any(isinstance(ch, folium.map.LayerControl) for ch in m._children.values())
+                except Exception:
+                    has_lc = False
+                if not has_lc:
+                    folium.LayerControl(position="topright", collapsed=False, autoZIndex=True).add_to(m)
+
+                # Tek st_folium çağrısı
                 ret = st_folium(
                     m,
                     key="riskmap",
                     height=540,
-                    width=1600,  # gerekirse kaldır/azalt
+                    width=1600,
                     returned_objects=["last_object_clicked", "last_clicked"],
                 )
-                
                 if ret:
                     gid, _ = resolve_clicked_gid(GEO_DF, ret)
                     if gid:
@@ -424,19 +424,17 @@ if sekme == "Operasyon":
                 # Pydeck harita
                 if build_map_fast_deck is None:
                     st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
-                    ret = None
                 else:
                     deck = build_map_fast_deck(
                         agg, GEO_DF,
                         show_poi=show_poi,
                         show_transit=show_transit,
                         patrol=st.session_state.get("patrol"),
-                        show_hotspot=show_hotspot,
-                        show_temp_hotspot=show_temp_hotspot,
+                        show_hotspot=True,
+                        show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
                     )
                     st.pydeck_chart(deck)
-                    ret = None
 
             # Açıklama kartı
             start_iso  = st.session_state["start_iso"]
@@ -488,9 +486,7 @@ if sekme == "Operasyon":
                 if "nr_boost" in df_agg.columns:
                     cols.append("nr_boost")
 
-                # KEY_COL güvenliği
                 df_agg2 = ensure_keycol(df_agg, KEY_COL)
-
                 tab = (
                     df_agg2[cols]
                     .sort_values("expected", ascending=False)
