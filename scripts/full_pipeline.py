@@ -1,19 +1,9 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Full pipeline (veri → özellik → model → çıktı)
-- Ham veriyi günceller/oluşturur (yoksa sentetik)
-- Özellik/istatistik dosyaları üretir (placeholder)
-- Basit bir “model eğitimi” örneği çalıştırır (placeholder)
-- data/_metadata.json içine data_upto/model_version/last_trained_at_sf yazar
-- data/events.csv dosyasını garanti eder: [ts, latitude, longitude, type, geoid?]
-
-Gereksinim: pandas, numpy (veya zaten projede mevcut)
-"""
+# full_pipeline.py
 
 from __future__ import annotations
 import json, os, sys, time
 from datetime import datetime, timedelta, timezone
+from services.metrics import save_latest_metrics
 import argparse
 import numpy as np
 import pandas as pd
@@ -27,6 +17,12 @@ DEFAULTS = {
     "META_FILE":     "data/_metadata.json",            # rozet için
     "MODEL_VERSION": "v0.3.1",
 }
+
+auc = roc_auc_score(y_test, y_pred_proba)
+hit_rate = hit_rate_topk(y_test, y_pred_proba, k=100)
+brier = brier_score_loss(y_test, y_pred_proba)
+
+save_latest_metrics(auc, hit_rate, brier)
 
 def try_import_settings():
     try:
