@@ -627,46 +627,16 @@ if sekme == "Operasyon":
                 horizon_h=int(st.session_state.get("horizon_h") or 0),
             )
         
-            # Yeni sürüm: tablodan doğrudan satır seçimi
-            try:
-                df_ret = st.dataframe(
-                    tab,
-                    use_container_width=True,
-                    height=260,
-                    hide_index=True,
-                    selection_mode="single",        # tek satır seçimi
-                    on_select="rerun",              # seçim değişince rerun
-                    key="top5_df",
-                )
-                sel = st.session_state.get("top5_df")
-                if sel and "selection" in sel and sel["selection"].get("rows"):
-                    idx = sel["selection"]["rows"][0]
-                    gid = str(tab.iloc[idx][KEY_COL])
-                    if st.session_state.get("explain", {}).get("geoid") != gid:
-                        st.session_state["explain"] = {"geoid": gid}
-                        st.experimental_rerun()
+            st.dataframe(tab, use_container_width=True)
         
-            except TypeError:
-                # Eski streamlit sürümleri için fallback: AgGrid
-                try:
-                    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
-                    gb = GridOptionsBuilder.from_dataframe(tab)
-                    gb.configure_selection("single")
-                    grid = AgGrid(
-                        tab, gridOptions=gb.build(), height=260,
-                        update_mode=GridUpdateMode.SELECTION_CHANGED,
-                        allow_unsafe_jscode=True, theme="balham",
-                    )
-                    rows = grid.get("selected_rows", [])
-                    if rows:
-                        gid = str(rows[0][KEY_COL])
-                        if st.session_state.get("explain", {}).get("geoid") != gid:
-                            st.session_state["explain"] = {"geoid": gid}
-                            st.experimental_rerun()
-                except Exception:
-                    st.dataframe(tab, use_container_width=True)
-                    st.info("Satır seçimi desteklenmiyor gibi görünüyor. Streamlit'i güncelleyin veya `streamlit-aggrid` kurun.")
-
+            # GEOID butonları
+            st.markdown("Seç / odağı haritada göster:")
+            cols = st.columns(len(tab))
+            for i, row in enumerate(tab.itertuples()):
+                with cols[i]:
+                    if st.button(str(row.geoid)):
+                        st.session_state["explain"] = {"geoid": str(row.geoid)}
+                        st.experimental_rerun()
 
             st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
 
