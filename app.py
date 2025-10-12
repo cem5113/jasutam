@@ -362,6 +362,44 @@ BASE_INT = precompute_base_intensity(GEO_DF)
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar (temiz)
 # ─────────────────────────────────────────────────────────────────────────────
+# --- Veri Tanı Paneli (hızlı sağlık kontrolü) ---
+with st.sidebar.expander("🔎 Veri Tanı / Health Check", expanded=False):
+    # GEO katmanı
+    st.markdown("**GEO katmanı**")
+    st.write("satır:", len(GEO_DF))
+    st.write("kolonlar:", list(GEO_DF.columns))
+    miss_centroid = GEO_DF[["centroid_lat","centroid_lon"]].isna().any(axis=1).sum() if \
+        {"centroid_lat","centroid_lon"}.issubset(GEO_DF.columns) else "—"
+    st.write("eksik centroid:", miss_centroid)
+
+    # Etkin olay dosyası
+    _events = load_events_safe()
+    st.markdown("**Events (ham dosya)**")
+    st.write("satır:", len(_events))
+    st.write("kolonlar:", list(_events.columns))
+    if not _events.empty:
+        # zorunlu alanlar + saat/dow dağılımı
+        lat_col = "latitude" if "latitude" in _events.columns else ("lat" if "lat" in _events.columns else None)
+        lon_col = "longitude" if "longitude" in _events.columns else ("lon" if "lon" in _events.columns else None)
+        ts_ok = "ts" in _events.columns
+        st.write("ts var mı:", ts_ok, "lat:", lat_col, "lon:", lon_col)
+        if ts_ok:
+            _tmp = _events.copy()
+            _tmp["ts"] = pd.to_datetime(_tmp["ts"], utc=True, errors="coerce")
+            _tmp = _tmp.dropna(subset=["ts"])
+            # SF yereline çevirip saat ve gün
+            _tmp["ts_sf"] = _tmp["ts"] + pd.Timedelta(hours=SF_TZ_OFFSET)
+            _tmp["hour"] = _tmp["ts_sf"].dt.hour
+            _tmp["dow"]  = _tmp["ts_sf"].dt.dayofweek
+            st.write("son 5 saat dağılımı:", _tmp["hour"].value_counts().sort_index().tail())
+            st.write("dow dağılımı:", _tmp["dow"].value_counts().sort_index())
+        if lat_col and lon_col:
+            st.write("eksik lat/lon:", int(_events[[lat_col, lon_col]].isna().any(axis=1).sum()))
+    else:
+        st.info("events.csv boş veya okunamadı.")
+
+
+
 with st.sidebar:
     if HAS_REPORTS:
         sekme = st.radio(
