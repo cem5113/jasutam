@@ -639,7 +639,7 @@ if sekme == "Operasyon":
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
             render_day_hour_heatmap(
                 st.session_state["agg"],
-                st.session_state.get("start_iso"],
+                st.session_state.get("start_iso"),
                 st.session_state.get("horizon_h"),
             )
         else:
