@@ -43,10 +43,7 @@ except ModuleNotFoundError:
     def render_reports(**kwargs):
         st.info("Raporlar modülü bulunamadı (components/report_view.py).")
 
-try:
-    from utils. import render_day_hour_  # type: ignore
-except ImportError:
-    render_day_hour_heatmap = fallback_heatmap  # type: ignore
+render_day_hour_heatmap = fallback_heatmap 
 
 try:
     from utils.deck import build_map_fast_deck  # type: ignore
