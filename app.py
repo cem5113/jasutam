@@ -371,6 +371,7 @@ BASE_INT = precompute_base_intensity(GEO_DF)
 # Sidebar
 # Sidebar (temiz)
 with st.sidebar:
+    # Sekme seçimi
     if HAS_REPORTS:
         sekme = st.radio(
             "Sekme", ["Operasyon", "Raporlar"],
@@ -379,12 +380,14 @@ with st.sidebar:
     else:
         sekme = "Operasyon"
 
-    st.markdown("### Devriye Parametreleri")
+    # Harita motoru
     engine = st.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
 
+    # Harita katmanları
     st.markdown("**Harita katmanları**")
     show_popups = st.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
 
+    # Grafik kapsamı
     st.markdown("**Grafik kapsamı**")
     scope = st.radio(
         "Grafik kapsamı", ["Tüm şehir", "Seçili hücre"],
@@ -395,11 +398,18 @@ with st.sidebar:
     show_hotspot = True
     show_temp_hotspot = True
     hotspot_cat = st.selectbox(
-        "Hotspot kategorisi", ["(Tüm suçlar)"] + CATEGORIES, index=0,
+        "Hotspot kategorisi",
+        ["(Tüm suçlar)"] + CATEGORIES,
+        index=0,
         help="Kalıcı/Geçici hotspot katmanları bu kategoriye göre gösterilir."
     )
+
+    # Gün içi saat filtresi (opsiyonel)
     use_hot_hours = st.checkbox("Geçici hotspot için gün içi saat filtresi", value=False)
-    hot_hours_rng = st.slider("Saat aralığı (hotspot)", 0, 24, (0, 24), disabled=not use_hot_hours)
+    if use_hot_hours:
+        hot_hours_rng = st.slider("Saat aralığı (hotspot)", 0, 24, (0, 24))
+    else:
+        hot_hours_rng = (0, 24)
 
     # Zaman ufku
     current_time = datetime.now().strftime('%H:%M')
@@ -407,20 +417,25 @@ with st.sidebar:
     ufuk_label = f"Zaman Aralığı (from {current_time}, today, {current_date})"
     ufuk = st.radio(ufuk_label, ["24s", "48s", "7g"], index=0, horizontal=True)
     max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7*24, 24)
-    start_h, end_h = st.slider("Saat filtresi", min_value=0, max_value=max_h, value=(0, max_h), step=step)
+    start_h, end_h = st.slider("Saat filtresi", 0, max_h, (0, max_h), step=step)
 
+    # Kategori seçimi
     sel_categories = st.multiselect("Kategori", ["(Hepsi)"] + CATEGORIES, default=[])
-    filters = {"cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories else (sel_categories or None)}
-    show_advanced = True
+    filters = {
+        "cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories
+        else (sel_categories or None)
+    }
 
+    # Devriye planı
     st.markdown("### Devriye Planı")
     K_planned = st.number_input("Planlanan devriye sayısı (K)", 1, 50, 6, 1)
     duty_minutes = st.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
     cell_minutes = st.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
 
+    # İşlem butonları
     colA, colB = st.columns(2)
     btn_predict = colA.button("Tahmin et")
-    btn_patrol  = colB.button("Devriye öner")
+    btn_patrol = colB.button("Devriye öner")
 
 # State
 st.session_state.setdefault("agg", None)
