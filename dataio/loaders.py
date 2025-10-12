@@ -4,6 +4,22 @@ import os, io, zipfile, json, requests
 from pathlib import Path
 from typing import Optional, Tuple, List
 import pandas as pd
+import json
+from typing import Dict, Any
+
+_THIS = Path(__file__).resolve()
+_PROJECT_ROOT = _THIS.parents[2]
+_DATA_DIR = _PROJECT_ROOT / "data"
+
+def load_metadata() -> Dict[str, Any]:
+    # data/metadata.json varsa kullan; yoksa boş
+    f = _DATA_DIR / "metadata.json"
+    if f.exists():
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
 
 # Ayarlar
 from config.settings import DATA_DIR as _DATA_DIR, RESULTS_DIR as _RESULTS_DIR
