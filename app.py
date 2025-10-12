@@ -10,16 +10,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import glob
-import io
+import os, io, glob
 from zipfile import ZipFile, BadZipFile
 from streamlit_folium import st_folium
-
-# ── AgGrid (Top-5 satıra tıklama için) ───────────────────────────────────────
-try:
-    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode  # type: ignore
-    HAS_AGGRID = True
-except ModuleNotFoundError:
-    HAS_AGGRID = False
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -50,20 +43,10 @@ except ModuleNotFoundError:
     def render_reports(**kwargs):
         st.info("Raporlar modülü bulunamadı (components/report_view.py).")
 
-# Heatmap (gelişmiş). Yoksa fallback'e düş.
 try:
-    from utils.heatmap import render_heatmap  # type: ignore
-except Exception:
-    def render_heatmap(
-        agg: pd.DataFrame,
-        start_iso: str | None,
-        horizon_h: int | None,
-        base_profile: pd.DataFrame | None = None,
-        events_df: pd.DataFrame | None = None,
-        mode: str = "Haftalık (7×24)",
-    ):
-        # Eski fallback imzası: (agg, start_iso, horizon_h)
-        return fallback_heatmap(agg, start_iso, horizon_h)
+    from utils. import render_day_hour_  # type: ignore
+except ImportError:
+    render_day_hour_heatmap = fallback_heatmap  # type: ignore
 
 try:
     from utils.deck import build_map_fast_deck  # type: ignore
@@ -204,7 +187,7 @@ def render_top_badge(model_version: str, last_train: str, last_update_iso: str, 
         f"• Model: {model_version}",
         f"• Son eğitim: {last_train}",
         f"• Günlük güncellenir: ~{daily_time_label} (SF)",
-        f"• Son güncelleme (SF): {last_update_iso}%",
+        f"• Son güncelleme (SF): {last_update_iso}",
     ]
     st.markdown(" ".join(parts))
 
@@ -356,7 +339,12 @@ st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
 LAST_UPDATE_ISO_SF = now_sf_iso()
-st.caption(f"Model: {MODEL_VERSION} • Son eğitim: {MODEL_LAST_TRAIN} • Son güncelleme (SF): {LAST_UPDATE_ISO_SF}")
+render_top_badge(
+    model_version=MODEL_VERSION,
+    last_train=MODEL_LAST_TRAIN,
+    last_update_iso=LAST_UPDATE_ISO_SF,
+    daily_time_label="19:00",
+)
 
 # Geo katmanı
 GEO_DF, GEO_FEATURES = load_geoid_layer("data/sf_cells.geojson")
@@ -369,11 +357,14 @@ if GEO_DF.empty:
 BASE_INT = precompute_base_intensity(GEO_DF)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sidebar
+# Sidebar (temiz)
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     if HAS_REPORTS:
-        sekme = st.radio("Sekme", ["Operasyon", "Raporlar"], index=0, horizontal=True, label_visibility="collapsed")
+        sekme = st.radio(
+            "Sekme", ["Operasyon", "Raporlar"],
+            index=0, horizontal=True, label_visibility="collapsed"
+        )
     else:
         sekme = "Operasyon"
 
@@ -383,7 +374,10 @@ with st.sidebar:
     show_popups = st.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
 
     st.markdown("**Grafik kapsamı**")
-    scope = st.radio("Grafik kapsamı", ["Tüm şehir", "Seçili hücre"], index=0, label_visibility="collapsed")
+    scope = st.radio(
+        "Grafik kapsamı", ["Tüm şehir", "Seçili hücre"],
+        index=0, label_visibility="collapsed"
+    )
 
     # Hotspot ayarları
     show_hotspot = True
@@ -413,15 +407,9 @@ with st.sidebar:
     # Kategori seçimi (tahmin motoru)
     sel_categories = st.multiselect("Kategori", ["(Hepsi)"] + CATEGORIES, default=[])
     filters = {
-        "cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories else (sel_categories or None)
+        "cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories
+        else (sel_categories or None)
     }
-
-    # Isı matrisi modu
-    heatmap_mode = st.selectbox(
-        "Isı matrisi modu",
-        ["Haftalık (7×24)", "Günlük (7×1)", "Saatlik (1×24)"],
-        index=0
-    )
 
     # Devriye planı
     st.markdown("### Devriye Planı")
@@ -533,11 +521,12 @@ if sekme == "Operasyon":
                         temp_hotspot_points=temp_points,
                     )
 
-                # LayerControl kaldır/ekle yönetimi
+                # build_map_fast LayerControl eklediyse kaldır
                 for k, ch in list(m._children.items()):
                     if isinstance(ch, folium.map.LayerControl):
                         del m._children[k]
 
+                # Taban katman + atıf
                 folium.TileLayer(
                     tiles="CartoDB positron",
                     name="cartodbpositron",
@@ -546,7 +535,7 @@ if sekme == "Operasyon":
                     'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
                 ).add_to(m)
 
-                # Seçili GEOID’i vurgula
+                # Seçili GEOID’i vurgula (Top-5’ten veya harita tıklamasından)
                 _sel = st.session_state.get("explain", {}).get("geoid")
                 if _sel:
                     try:
@@ -600,7 +589,7 @@ if sekme == "Operasyon":
         if info and info.get("geoid"):
             render_result_card(agg, info["geoid"], start_iso, horizon_h)
         else:
-            st.info("Haritada bir hücreye tıklayın veya tablodan seçin; kart burada görünecek.")
+            st.info("Haritada bir hücreye tıklayın; kart burada görünecek.")
 
     # Sağ panel – özetler
     with col2:
@@ -628,8 +617,8 @@ if sekme == "Operasyon":
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
-        # ── Top-5: AgGrid ile satır tıklama ───────────────────────────────────
         st.subheader("Top-5 kritik GEOID")
+        
         a = st.session_state.get("agg")
         if isinstance(a, pd.DataFrame) and not a.empty:
             tab = top_risky_table(
@@ -637,37 +626,19 @@ if sekme == "Operasyon":
                 start_iso=st.session_state.get("start_iso"),
                 horizon_h=int(st.session_state.get("horizon_h") or 0),
             )
-
-            if HAS_AGGRID:
-                gb = GridOptionsBuilder.from_dataframe(tab)
-                gb.configure_selection(selection_mode="single", use_checkbox=False)
-                gb.configure_grid_options(
-                    rowSelection="single",
-                    suppressRowClickSelection=False,
-                    animateRows=True,
-                )
-                gb.configure_column("geoid", header_name="geoid",
-                                    cellStyle={"fontWeight": "600", "cursor": "pointer"})
-                grid_options = gb.build()
-
-                grid_resp = AgGrid(
-                    tab,
-                    gridOptions=grid_options,
-                    update_mode=GridUpdateMode.SELECTION_CHANGED,
-                    height=220,
-                    fit_columns_on_grid_load=True
-                )
-
-                if grid_resp and grid_resp.get("selected_rows"):
-                    sel_geoid = str(grid_resp["selected_rows"][0]["geoid"])
-                    if st.session_state.get("explain", {}).get("geoid") != sel_geoid:
-                        st.session_state["explain"] = {"geoid": sel_geoid}
+        
+            st.dataframe(tab, use_container_width=True)
+        
+            # GEOID butonları
+            st.markdown("Seç / odağı haritada göster:")
+            cols = st.columns(len(tab))
+            for i, row in enumerate(tab.itertuples()):
+                with cols[i]:
+                    if st.button(str(row.geoid)):
+                        st.session_state["explain"] = {"geoid": str(row.geoid)}
                         st.experimental_rerun()
-            else:
-                st.dataframe(tab, use_container_width=True, height=220)
-                st.info("Satıra tıklama için: `pip install streamlit-aggrid` kurun ve uygulamayı yeniden başlatın.")
-        else:
-            st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
+
+            st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
 
         st.subheader("Devriye özeti")
         if isinstance(a, pd.DataFrame) and not a.empty and st.session_state.get("agg") is not None and btn_patrol:
@@ -697,13 +668,10 @@ if sekme == "Operasyon":
 
         st.subheader("Gün × Saat Isı Matrisi")
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
-            render_heatmap(
-                agg=st.session_state["agg"],
-                start_iso=st.session_state.get("start_iso"),
-                horizon_h=st.session_state.get("horizon_h"),
-                base_profile=BASE_INT,
-                events_df=st.session_state.get("events"),
-                mode=heatmap_mode,
+            render_day_hour_heatmap(
+                st.session_state["agg"],
+                st.session_state.get("start_iso"),
+                st.session_state.get("horizon_h"),
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
