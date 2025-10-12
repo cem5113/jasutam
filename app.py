@@ -97,6 +97,51 @@ except Exception:
 # Yardımcılar
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _parse_latest_ts(df: pd.DataFrame) -> Optional[pd.Timestamp]:
+    if df is None or df.empty:
+        return None
+    # Olası zaman sütunları (isim farklarını tolere et)
+    candidates = [
+        "occurred_at", "reported_at", "incident_datetime", "incident_date",
+        "datetime", "date_time", "timestamp", "ts", "date", "time"
+    ]
+    lower = {str(c).strip().lower(): c for c in df.columns}
+    for name in candidates:
+        if name in lower:
+            col = lower[name]
+            try:
+                ts = pd.to_datetime(df[col], utc=True, errors="coerce")
+                if ts.notna().any():
+                    return ts.max()
+            except Exception:
+                pass
+    return None
+
+def load_latest_crime_ts(paths: list[str]) -> Optional[str]:
+    """
+    Verilen dosya sırasına göre ilk bulunan dosyadan en güncel zamanı alır
+    ve SF saatine çevirip ISO-8601 string döner.
+    """
+    for p in paths:
+        try:
+            if not os.path.exists(p):
+                continue
+            # CSV veya Parquet destekle
+            if p.lower().endswith((".parquet", ".pq")):
+                df = pd.read_parquet(p)
+            else:
+                # Büyük dosyalarda hızlı şema tahmini için dtype'ları zorlamıyoruz
+                df = pd.read_csv(p, low_memory=False)
+            latest_utc = _parse_latest_ts(df)
+            if latest_utc is not None:
+                latest_sf = latest_utc + pd.Timedelta(hours=SF_TZ_OFFSET)
+                # İstersen saatli gösterim istiyorsan timespec="minutes" yapabilirsin
+                return latest_sf.isoformat(timespec="seconds")
+        except Exception:
+            # Bir dosyada hata olursa sıradakine geç
+            continue
+    return None
+
 def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
     """DataFrame'de KEY_COL adını garanti eder ve string'e çevirir."""
     if df is None or df.empty:
@@ -345,25 +390,26 @@ st.title("SUTAM: Suç Tahmin Modeli")
 
 # Veri sonu
 try:
+    crime_paths = [
+        "data/sf_crime.csv",
+        "data/sf_crime_52.csv",
+        "data/sf_crime_50.csv",
+    ]
+    data_upto_val = load_latest_crime_ts(crime_paths)
+
     _events_df = load_events_safe()
     st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
     st.session_state["events"] = st.session_state["events_df"]
-    data_upto_val = (
-        pd.to_datetime(_events_df["ts"]).max().date().isoformat()
-        if isinstance(_events_df, pd.DataFrame)
-        and not _events_df.empty
-        and "ts" in _events_df.columns
-        else None
-    )
 except Exception:
     st.session_state["events_df"] = None
     st.session_state["events"] = None
     data_upto_val = None
 show_last_update_badge(
-    data_upto=data_upto_val,
+    data_upto=(data_upto_val.split("T")[0] if data_upto_val else None),
     model_version=MODEL_VERSION,
     last_train=MODEL_LAST_TRAIN,
 )
+
 # Geo katmanı
 GEO_DF, GEO_FEATURES = load_geoid_layer("data/sf_cells.geojson")
 GEO_DF = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
