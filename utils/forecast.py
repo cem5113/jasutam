@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, Iterable
 import numpy as np
 import pandas as pd
 
-from utils.constants import CRIME_TYPES, KEY_COL, CATEGORY_TO_KEYS
+from utils.constants import CRIME_TYPES, KEY_COL, CATEGORY_TO_KEYS, SF_TZ_OFFSET
 
 # ---- küçük yardımcılar ----
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
@@ -23,7 +23,7 @@ def precompute_base_intensity(geo_df: pd.DataFrame) -> np.ndarray:
     lon = pd.to_numeric(geo_df["centroid_lon"], errors="coerce").to_numpy()
     lat = pd.to_numeric(geo_df["centroid_lat"], errors="coerce").to_numpy()
 
-    # 2 sentetik tepe + küçük zemin
+    # 2 sentetik tepe + küçük zemin (veri yoksa fallback yüzeyi)
     peak1 = np.exp(-(((lon + 122.41) ** 2) / 0.0008 + ((lat - 37.78) ** 2) / 0.0005))
     peak2 = np.exp(-(((lon + 122.42) ** 2) / 0.0006 + ((lat - 37.76) ** 2) / 0.0006))
     raw = 0.2 + 0.8 * (peak1 + peak2) + 0.07
@@ -82,6 +82,50 @@ def _near_repeat_score(
     maxv = nr.max()
     return (nr / maxv) if maxv > 1e-9 else np.zeros_like(nr)
 
+# -------------------- Events'ten (24,7) zaman ağırlıkları --------------------
+def _build_time_weights_from_events(events: pd.DataFrame | None) -> tuple[np.ndarray, np.ndarray]:
+    """
+    events -> (hour_of_day weights [24], day_of_week weights [7]).
+    UTC ts'leri SF yereline çevirir. Veri yoksa makul fallback döner.
+    """
+    # Fallback: sinüs bazlı 24 saat profili ve hafif hafta etkisi
+    h = np.arange(24, dtype=float)
+    diurnal24 = 1.0 + 0.4 * np.sin(((h - 18) / 24.0) * 2.0 * np.pi)
+    diurnal24 = np.clip(diurnal24, 1e-6, None)
+    diurnal24 = diurnal24 / diurnal24.sum()
+
+    weekly7 = np.array([0.95, 1.00, 1.00, 1.00, 1.05, 1.10, 1.10], dtype=float)
+    weekly7 = weekly7 / weekly7.sum()
+
+    if not isinstance(events, pd.DataFrame) or events.empty:
+        return diurnal24, weekly7
+
+    cols = {c.lower(): c for c in events.columns}
+    ts_col = cols.get("ts") or cols.get("timestamp")
+    if not ts_col:
+        return diurnal24, weekly7
+
+    tmp = events[[ts_col]].copy()
+    tmp[ts_col] = pd.to_datetime(tmp[ts_col], utc=True, errors="coerce")
+    tmp = tmp.dropna()
+    if tmp.empty:
+        return diurnal24, weekly7
+
+    # UTC → SF
+    tmp["ts_sf"] = tmp[ts_col] + pd.Timedelta(hours=SF_TZ_OFFSET)
+
+    # Saat (0..23)
+    hours_cnt = tmp["ts_sf"].dt.hour.value_counts().reindex(range(24), fill_value=0).astype(float)
+    if hours_cnt.sum() > 0:
+        diurnal24 = (hours_cnt / hours_cnt.sum()).to_numpy()
+
+    # Gün (Mon=0..Sun=6)
+    dow_cnt = tmp["ts_sf"].dt.dayofweek.value_counts().reindex(range(7), fill_value=0).astype(float)
+    if dow_cnt.sum() > 0:
+        weekly7 = (dow_cnt / dow_cnt.sum()).to_numpy()
+
+    return diurnal24, weekly7
+
 # -------------------- Hızlı agregasyon (NR + filtre + 5'li tier) --------------------
 def aggregate_fast(
     start_iso: str,
@@ -97,11 +141,17 @@ def aggregate_fast(
     nr_decay_h: float = 12.0,
     filters: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
-    # diurnal
     start = datetime.fromisoformat(start_iso)
     H = max(int(horizon_h), 1)
-    hours = np.arange(H)
-    diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
+
+    # Events'ten (24,7) zaman ağırlıkları
+    hour_w24, dow_w7 = _build_time_weights_from_events(events)
+
+    # Ufuk boyunca her saat için (hour,dow) ağırlığı
+    # Not: start_iso uygulama tarafından SF lokaline göre üretildiği için yeniden ofset eklemiyoruz.
+    t_list = [start + timedelta(hours=i) for i in range(H)]
+    w = np.array([hour_w24[t.hour] * dow_w7[t.weekday()] for t in t_list], dtype=float)
+    w = w / (w.sum() + 1e-12)
 
     # near-repeat
     nr = _near_repeat_score(
@@ -112,7 +162,7 @@ def aggregate_fast(
     )
 
     # saatlik lambda ve kırpmalar
-    lam_hour = k_lambda * base_int[:, None] * diurnal[None, :]
+    lam_hour = k_lambda * base_int[:, None] * w[None, :]
     lam_hour *= (1.0 + near_repeat_alpha * nr[:, None])
     lam_hour = np.clip(lam_hour, 0.0, 0.9)
 
@@ -121,7 +171,7 @@ def aggregate_fast(
     q10 = np.quantile(p_hour, 0.10, axis=1)
     q90 = np.quantile(p_hour, 0.90, axis=1)
 
-    # tür dağılımı (CRIME_TYPES varsa onu kullan)
+    # tür dağılımı (CRIME_TYPES varsa onu kullan; yoksa stabil bir fallback)
     rng = np.random.default_rng(42)
     if CRIME_TYPES and len(CRIME_TYPES) >= 1:
         alpha = np.full(len(CRIME_TYPES), 1.2)
