@@ -414,6 +414,12 @@ with st.sidebar:
     duty_minutes = st.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
     cell_minutes = st.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
 
+    run_hourly_heatmap = st.checkbox(
+        "Isı matrisi için saatlik (gerçek) tahmin (yavaş)",
+        value=False,
+        help="Her saat için model çalıştırır; 24/48/168 kez. Yavaş olabilir."
+    )
+
     colA, colB = st.columns(2)
     btn_predict = colA.button("Tahmin et")
     btn_patrol  = colB.button("Devriye öner")
@@ -665,13 +671,52 @@ if sekme == "Operasyon":
 
         st.subheader("Gün × Saat Isı Matrisi")
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
-            render_day_hour_heatmap(
-                st.session_state["agg"],
-                st.session_state.get("start_iso"),
-                st.session_state.get("horizon_h"),
-            )
+        
+            if run_hourly_heatmap:
+                # ⬇️ GERÇEK 7×24: her saat için 1 saatlik tahmin
+                start = pd.to_datetime(st.session_state["start_iso"])
+                H = int(st.session_state.get("horizon_h") or 24)
+        
+                rows = []
+                events_all = st.session_state.get("events")
+                for i in range(H):
+                    si = (start + pd.to_timedelta(i, unit="h")).isoformat()
+                    agg_i = aggregate_fast(
+                        si, 1, GEO_DF, BASE_INT,
+                        events=events_all,
+                        near_repeat_alpha=0.35,
+                        nr_lookback_h=24,
+                        nr_radius_m=400,
+                        nr_decay_h=12.0,
+                        filters=filters,
+                    )
+                    tot = float(pd.to_numeric(agg_i.get("expected", pd.Series(dtype=float)), errors="coerce")
+                                .clip(lower=0).sum())
+                    t_sf = (start + pd.to_timedelta(i, unit="h")) + pd.Timedelta(hours=SF_TZ_OFFSET)
+                    rows.append({"dow": t_sf.weekday(), "hour": t_sf.hour, "E_city": tot})
+        
+                mat = (pd.DataFrame(rows)
+                       .groupby(["dow", "hour"], as_index=False)["E_city"].sum()
+                       .pivot(index="dow", columns="hour", values="E_city")
+                       .reindex(range(7)).fillna(0.0))
+                mat.index = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+                mat.columns = [f"{h:02d}" for h in mat.columns]
+        
+                st.dataframe(mat.round(2), use_container_width=True)
+                arr = mat.to_numpy()
+                i, j = np.unravel_index(np.argmax(arr), arr.shape)
+                st.caption(f"Toplam beklenen: {mat.values.sum():.2f} • En yoğun: {mat.index[i]} {mat.columns[j]}")
+        
+            else:
+                # ⬇️ Hızlı mod: eldeki toplamı profile dağıtır (mevcut fonksiyonun)
+                render_day_hour_heatmap(
+                    st.session_state["agg"],
+                    st.session_state.get("start_iso"),
+                    st.session_state.get("horizon_h"),
+                )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
