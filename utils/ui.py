@@ -12,10 +12,11 @@ import streamlit as st
 
 # 🔒 constants (safe import; dairesel importu önler)
 try:
-    from utils.constants import KEY_COL, CRIME_TYPES
+    from utils.constants import KEY_COL, CRIME_TYPES, SF_TZ_OFFSET
 except Exception:
     KEY_COL = "GEOID"
     CRIME_TYPES = []
+    SF_TZ_OFFSET = -7
 
 from utils.forecast import pois_pi90
 
@@ -645,58 +646,4 @@ def build_map_fast(
     return m
 
 # ───────────── Gün × Saat Isı Matrisi ─────────────
-def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, horizon_h: int | None = None):
-    """
-    - agg 'dow' ve 'hour' içeriyorsa direkt pivot.
-    - Değilse ve start_iso & horizon_h verilmişse, toplam expected’ı diurnal profile göre saatlere dağıtır.
-    - Aksi halde 24 saatlik varsayılan bir dağıtım üretir.
-    """
-    if agg is None or agg.empty:
-        st.caption("Isı matrisi için veri yok."); return
-
-    if {"dow", "hour"}.issubset(agg.columns):
-        mat = (
-            agg.pivot_table(index="dow", columns="hour", values="expected", aggfunc="sum")
-               .reindex(index=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], fill_value=0.0)
-               .reindex(columns=list(range(24)), fill_value=0.0)
-        )
-        st.dataframe(mat.round(2), use_container_width=True)
-        tot = float(mat.values.sum())
-        idx = np.unravel_index(np.argmax(mat.values), mat.shape)
-        st.caption(f"Toplam beklenen: {tot:.2f} • En yoğun hücre: {mat.index[idx[0]]} {mat.columns[idx[1]]}: {mat.values[idx]:.2f}")
-        return
-
-    if start_iso is not None and horizon_h is not None:
-        start = pd.to_datetime(start_iso)
-        hours = np.arange(int(horizon_h))
-        diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
-        w = diurnal / (diurnal.sum() + 1e-12)
-        total_expected = float(agg["expected"].sum())
-
-        dow_labels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-        mat = pd.DataFrame(0.0, index=dow_labels, columns=[f"{h:02d}" for h in range(24)])
-        for h, weight in enumerate(w):
-            dt = start + timedelta(hours=int(h))
-            mat.loc[dow_labels[dt.dayofweek], f"{dt.hour:02d}"] += total_expected * float(weight)
-
-        st.dataframe(mat.round(2), use_container_width=True)
-        idx = np.unravel_index(np.argmax(mat.values), mat.shape)
-        st.caption(f"Toplam beklenen: {total_expected:.2f} • En yoğun: {mat.index[idx[0]]} {mat.columns[idx[1]]}")
-        return
-
-    # Fallback: 24 saat varsayılan
-    start = pd.Timestamp.utcnow()
-    hours = np.arange(24)
-    diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24) * 2 * np.pi)
-    w = diurnal / (diurnal.sum() + 1e-12)
-    total_expected = float(agg["expected"].sum())
-
-    dow_labels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-    mat = pd.DataFrame(0.0, index=dow_labels, columns=[f"{h:02d}" for h in range(24)])
-    for h, weight in enumerate(w):
-        dt = start + timedelta(hours=int(h))
-        mat.loc[dow_labels[dt.dayofweek], f"{dt.hour:02d}"] += total_expected * float(weight)
-
-    st.dataframe(mat.round(2), use_container_width=True)
-    idx = np.unravel_index(np.argmax(mat.values), mat.shape)
-    st.caption(f"Toplam beklenen: {total_expected:.2f} • En yoğun: {mat.index[idx[0]]} {mat.columns[idx[1]]}")
+diurnal
