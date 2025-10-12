@@ -151,18 +151,15 @@ def aggregate_fast(
     # Not: start_iso uygulama tarafından SF lokaline göre üretildiği için yeniden ofset eklemiyoruz.
     t_list = [start + timedelta(hours=i) for i in range(H)]
     w = np.array([hour_w24[t.hour] * dow_w7[t.weekday()] for t in t_list], dtype=float)
-    w = w / (w.sum() + 1e-12)
+    w = w / (w.sum() + 1e-12)         
+    w = H * w                       
 
     # near-repeat
-    nr = _near_repeat_score(
-        geo_df, events, start_iso,
-        lookback_h=nr_lookback_h,
-        spatial_radius_m=nr_radius_m,
-        temporal_decay_h=nr_decay_h,
-    )
+    nr = _near_repeat_score( ... )
 
     # saatlik lambda ve kırpmalar
-    lam_hour = k_lambda * base_int[:, None] * w[None, :]
+    base_per_hour = k_lambda * base_int  # hücre başına saatlik baz oran
+    lam_hour = base_per_hour[:, None] * w[None, :]
     lam_hour *= (1.0 + near_repeat_alpha * nr[:, None])
     lam_hour = np.clip(lam_hour, 0.0, 0.9)
 
