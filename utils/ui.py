@@ -646,4 +646,53 @@ def build_map_fast(
     return m
 
 # ───────────── Gün × Saat Isı Matrisi ─────────────
-diurnal
+def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, horizon_h: int | None = None):
+    """
+    Fallback 7×24 ısı matrisi:
+    - Model saatlik üretmiyorsa şehir toplam bekleneni, ufuk içindeki (dow,hour)
+      frekansına göre dağıtır (günler eşit olmaz).
+    - start_iso/horizon_h yoksa 24 saatlik ufuk varsayar.
+    """
+    if agg is None or agg.empty:
+        st.caption("Isı matrisi için veri yok.")
+        return
+
+    # 1) Başlangıç & ufuk
+    try:
+        start = pd.to_datetime(start_iso) if start_iso else pd.Timestamp.utcnow()
+    except Exception:
+        start = pd.Timestamp.utcnow()
+    H = int(horizon_h or 24)
+    if H <= 0:
+        H = 24
+
+    # 2) SF yereline çevir & (dow,hour) frekansı
+    start = start.replace(minute=0, second=0, microsecond=0)
+    start_sf = start + pd.Timedelta(hours=SF_TZ_OFFSET)
+    hours = [start_sf + pd.Timedelta(hours=i) for i in range(H)]
+    freq = (
+        pd.DataFrame({"dow": [h.weekday() for h in hours], "hour": [h.hour for h in hours]})
+        .value_counts(["dow", "hour"]).rename("freq").reset_index()
+    )
+
+    # 3) Şehir toplam beklenen
+    total_expected = float(
+        pd.to_numeric(agg.get("expected", pd.Series(dtype=float)), errors="coerce")
+          .replace([np.inf, -np.inf], np.nan)
+          .fillna(0).clip(lower=0).sum()
+    )
+
+    # 4) Paylara göre dağıt ve pivotla
+    share = freq["freq"] / float(freq["freq"].sum() or 1.0)
+    freq["E_city"] = total_expected * share
+
+    mat = (freq.pivot(index="dow", columns="hour", values="E_city")
+               .reindex(range(7)).fillna(0.0))
+    mat.index = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+    mat.columns = [f"{h:02d}" for h in mat.columns]
+
+    st.dataframe(mat.round(2), use_container_width=True)
+    arr = mat.to_numpy()
+    i, j = np.unravel_index(np.argmax(arr), arr.shape)
+    st.caption(f"Toplam beklenen: {total_expected:.2f} • En yoğun: {mat.index[i]} {mat.columns[j]}")
+
