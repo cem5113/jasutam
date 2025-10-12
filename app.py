@@ -32,7 +32,6 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from services.metrics import compute_kpis
-# NOT: components.last_update.show_last_update_badge kullanılmıyor
 
 # Opsiyonel modüller
 try:
@@ -183,10 +182,6 @@ def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: in
         return pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
 def render_top_badge(model_version: str, last_train: str, last_update_iso: str, daily_time_label: str = "19:00"):
-    """
-    Üst bilgi satırı (tek satır):
-    SUTAM • Model • Son eğitim • Günlük güncellenir • Son güncelleme (SF)
-    """
     parts = [
         "**SUTAM**",
         f"• Model: {model_version}",
@@ -224,7 +219,7 @@ def run_prediction(
         filters=filters,
     )
 
-    # Sağlam kademe sınıflayıcı: expected → ['Çok Düşük','Düşük','Orta','Yüksek','Çok Yüksek']
+    # Sağlam kademe sınıflayıcı
     def assign_tier_safe(agg_in: pd.DataFrame) -> pd.DataFrame:
         if agg_in is None or agg_in.empty or "expected" not in agg_in.columns:
             return agg_in
@@ -238,12 +233,10 @@ def run_prediction(
         out["expected"] = x
         labels5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
 
-        # Veri çeşitliliği azsa tek seviyeye düş
         if x.nunique(dropna=True) < 5 or x.count() < 5:
             out["tier"] = "Çok Düşük"
             return out
 
-        # qcut ile dene
         try:
             out["tier"] = pd.qcut(x, q=5, labels=labels5, duplicates="drop").astype(str)
             if out["tier"].isna().all():
@@ -252,7 +245,6 @@ def run_prediction(
         except Exception:
             pass
 
-        # Elle kantil: epsilon ile kenarları ayır
         try:
             q = np.quantile(x.to_numpy(), [0.20, 0.40, 0.60, 0.80]).astype(float)
             eps = max(1e-9, 1e-6 * float(np.nanmax(x) - np.nanmin(x)))
@@ -284,7 +276,7 @@ def run_prediction(
     agg = assign_tier_safe(agg)
     agg = ensure_keycol(agg, KEY_COL)
 
-    # Uzun ufuk referansı (30 gün geriden bugüne)
+    # Uzun ufuk referansı (30 gün)
     try:
         long_start_iso = (
             datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET - 30 * 24)
@@ -317,7 +309,6 @@ def top_risky_table(
     lam = df["expected"].to_numpy()
     df["P(≥1)%"] = [round(prob_ge_k(l, 1) * 100, 1) for l in lam]
 
-    # Saat aralığı (SF)
     try:
         if start_iso:
             _start = pd.to_datetime(start_iso)
@@ -347,10 +338,7 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-# ► TEK KAYNAK (üst bant için): Son güncelleme (SF)
-LAST_UPDATE_ISO_SF = now_sf_iso()  # saniyeli ISO-8601
-
-# ÜST BANT — yalnızca BİR KEZ "Son güncelleme (SF)" gösterilir
+LAST_UPDATE_ISO_SF = now_sf_iso()
 render_top_badge(
     model_version=MODEL_VERSION,
     last_train=MODEL_LAST_TRAIN,
@@ -368,10 +356,10 @@ if GEO_DF.empty:
 # Model tabanı
 BASE_INT = precompute_base_intensity(GEO_DF)
 
-# Sidebar
+# ─────────────────────────────────────────────────────────────────────────────
 # Sidebar (temiz)
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # Sekme seçimi
     if HAS_REPORTS:
         sekme = st.radio(
             "Sekme", ["Operasyon", "Raporlar"],
@@ -380,14 +368,11 @@ with st.sidebar:
     else:
         sekme = "Operasyon"
 
-    # Harita motoru
     engine = st.radio("Harita motoru", ["Folium", "pydeck"], index=0, horizontal=True)
 
-    # Harita katmanları
     st.markdown("**Harita katmanları**")
     show_popups = st.checkbox("Hücre popup'larını (en olası 3 suç) göster", value=True)
 
-    # Grafik kapsamı
     st.markdown("**Grafik kapsamı**")
     scope = st.radio(
         "Grafik kapsamı", ["Tüm şehir", "Seçili hücre"],
@@ -419,7 +404,7 @@ with st.sidebar:
     max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7*24, 24)
     start_h, end_h = st.slider("Saat filtresi", 0, max_h, (0, max_h), step=step)
 
-    # Kategori seçimi
+    # Kategori seçimi (tahmin motoru)
     sel_categories = st.multiselect("Kategori", ["(Hepsi)"] + CATEGORIES, default=[])
     filters = {
         "cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories
@@ -432,10 +417,9 @@ with st.sidebar:
     duty_minutes = st.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
     cell_minutes = st.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
 
-    # İşlem butonları
     colA, colB = st.columns(2)
     btn_predict = colA.button("Tahmin et")
-    btn_patrol = colB.button("Devriye öner")
+    btn_patrol  = colB.button("Devriye öner")
 
 # State
 st.session_state.setdefault("agg", None)
@@ -443,7 +427,7 @@ st.session_state.setdefault("agg_long", None)
 st.session_state.setdefault("patrol", None)
 st.session_state.setdefault("start_iso", None)
 st.session_state.setdefault("horizon_h", None)
-st.session_state.setdefault("explain", {})
+st.session_state.setdefault("explain", {})  # {"geoid": "xxxxx"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Operasyon
@@ -452,7 +436,6 @@ if sekme == "Operasyon":
     col1, col2 = st.columns([2.4, 1.0])
 
     with col1:
-        # NOT: Buradaki alt yazıda "Son güncelleme (SF)" ARTIK YOK (tekrarı engellemek için)
         if btn_predict or st.session_state["agg"] is None:
             agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
             st.session_state.update(
@@ -552,6 +535,21 @@ if sekme == "Operasyon":
                     'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
                 ).add_to(m)
 
+                # Seçili GEOID’i vurgula (Top-5’ten veya harita tıklamasından)
+                _sel = st.session_state.get("explain", {}).get("geoid")
+                if _sel:
+                    try:
+                        row = GEO_DF[GEO_DF[KEY_COL].astype(str) == str(_sel)].head(1)
+                        if not row.empty and {"centroid_lat", "centroid_lon"}.issubset(row.columns):
+                            lat = float(row["centroid_lat"].iloc[0])
+                            lon = float(row["centroid_lon"].iloc[0])
+                            folium.CircleMarker(
+                                location=(lat, lon), radius=10, weight=3, color="#111",
+                                fill=False, tooltip=f"Seçili GEOID: {str(_sel)}"
+                            ).add_to(m)
+                    except Exception:
+                        pass
+
                 folium.LayerControl(position="topright", collapsed=True, autoZIndex=True).add_to(m)
 
                 ret = st_folium(
@@ -620,23 +618,33 @@ if sekme == "Operasyon":
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
         st.subheader("Top-5 kritik GEOID")
+
         if isinstance(a, pd.DataFrame) and not a.empty:
             tab = top_risky_table(
                 a,
                 n=5,
-                show_ci=show_advanced,
+                show_ci=True,
                 start_iso=st.session_state.get("start_iso"),
                 horizon_h=int(st.session_state.get("horizon_h") or 0),
             )
-            st.dataframe(tab, use_container_width=True, height=300)
-            st.caption(
-                "P(≥1)%: Seçilen ufukta en az bir olay olma olasılığı."
-                if not show_advanced
-                else "95% GA: λ ± 1.96·√λ (alt sınır 0'a kırpılır)."
-            )
+
+            # Tabloyu göster
+            st.dataframe(tab, use_container_width=True, height=260)
+
+            # GEOID'e tıklanabilir butonlar (seçim)
+            geoids = tab[KEY_COL].astype(str).tolist()
+            st.markdown("**Seç / odağı haritada göster:**")
+            btn_cols = st.columns(len(geoids)) if len(geoids) <= 5 else st.columns(5)
+            for i, gid in enumerate(geoids):
+                col = btn_cols[i % len(btn_cols)]
+                if col.button(gid, key=f"pick_{gid}"):
+                    st.session_state["explain"] = {"geoid": gid}
+                    st.experimental_rerun()
+
+            st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
 
         st.subheader("Devriye özeti")
-        if isinstance(a, pd.DataFrame) and not a.empty and btn_patrol:
+        if isinstance(a, pd.DataFrame) and not a.empty and st.session_state.get("agg") is not None and btn_patrol:
             st.session_state["patrol"] = allocate_patrols(
                 a,
                 GEO_DF,
