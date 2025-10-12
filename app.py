@@ -417,7 +417,7 @@ start_h, end_h = st.sidebar.slider("Saat filtresi", min_value=0, max_value=max_h
 sel_categories = st.sidebar.multiselect("Kategori", ["(Hepsi)"] + CATEGORIES, default=[])
 filters = {"cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories else (sel_categories or None)}
 
-show_advanced = st.sidebar.checkbox("Gelişmiş metrikleri göster (analist)", value=False)
+show_advanced = true
 
 st.sidebar.divider()
 st.sidebar.subheader("Devriye Parametreleri")
