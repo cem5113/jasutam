@@ -369,9 +369,10 @@ if GEO_DF.empty:
 BASE_INT = precompute_base_intensity(GEO_DF)
 
 # Sidebar
-st.sidebar.markdown("### Görünüm")
-sekme_options = ["Operasyon"] + (["Raporlar"] if HAS_REPORTS else [])
-sekme = st.sidebar.radio("", options=sekme_options, index=0, horizontal=True)
+if HAS_REPORTS:
+    sekme = st.sidebar.radio("", options=["Operasyon", "Raporlar"], index=0, horizontal=True)
+else:
+    sekme = "Operasyon"  # tek seçenek olduğunda radyo görünmez
 
 st.sidebar.divider()
 st.sidebar.header("Devriye Parametreleri")
