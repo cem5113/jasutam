@@ -10,9 +10,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import glob
-import os, io, glob
+import io
 from zipfile import ZipFile, BadZipFile
 from streamlit_folium import st_folium
+
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode  # type: ignore
+    HAS_AGGRID = True
+except ModuleNotFoundError:
+    HAS_AGGRID = False
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -44,9 +50,9 @@ except ModuleNotFoundError:
         st.info("Raporlar modülü bulunamadı (components/report_view.py).")
 
 try:
-    from utils.heatmap import render_day_hour_heatmap  # type: ignore
+    from utils.heatmap import render_day_hour_heatmap  
 except ImportError:
-    render_day_hour_heatmap = fallback_heatmap  # type: ignore
+    render_day_hour_heatmap = fallback_heatmap 
 
 try:
     from utils.deck import build_map_fast_deck  # type: ignore
@@ -618,7 +624,6 @@ if sekme == "Operasyon":
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
         st.subheader("Top-5 kritik GEOID")
-        
         a = st.session_state.get("agg")
         if isinstance(a, pd.DataFrame) and not a.empty:
             tab = top_risky_table(
@@ -627,18 +632,34 @@ if sekme == "Operasyon":
                 horizon_h=int(st.session_state.get("horizon_h") or 0),
             )
         
-            st.dataframe(tab, use_container_width=True)
+            if HAS_AGGRID:
+                gb = GridOptionsBuilder.from_dataframe(tab)
+                gb.configure_selection(selection_mode="single", use_checkbox=False)
+                gb.configure_grid_options(
+                    rowSelection="single",
+                    suppressRowClickSelection=False,
+                    animateRows=True,
+                )
+                gb.configure_column("geoid", header_name="geoid",
+                                    cellStyle={"fontWeight": "600", "cursor": "pointer"})
+                grid_options = gb.build()
         
-            # GEOID butonları
-            st.markdown("Seç / odağı haritada göster:")
-            cols = st.columns(len(tab))
-            for i, row in enumerate(tab.itertuples()):
-                with cols[i]:
-                    if st.button(str(row.geoid)):
-                        st.session_state["explain"] = {"geoid": str(row.geoid)}
+                grid_resp = AgGrid(
+                    tab,
+                    gridOptions=grid_options,
+                    update_mode=GridUpdateMode.SELECTION_CHANGED,
+                    height=220,
+                    fit_columns_on_grid_load=True
+                )
+        
+                if grid_resp and grid_resp.get("selected_rows"):
+                    sel_geoid = str(grid_resp["selected_rows"][0]["geoid"])
+                    if st.session_state.get("explain", {}).get("geoid") != sel_geoid:
+                        st.session_state["explain"] = {"geoid": sel_geoid}
                         st.experimental_rerun()
-
-            st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
+            else:
+                st.dataframe(tab, use_container_width=True, height=220)
+                st.info("Satıra tıklama için: `pip install streamlit-aggrid` kurun ve uygulamayı yeniden başlatın.")
 
         st.subheader("Devriye özeti")
         if isinstance(a, pd.DataFrame) and not a.empty and st.session_state.get("agg") is not None and btn_patrol:
