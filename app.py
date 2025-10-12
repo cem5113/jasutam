@@ -404,7 +404,6 @@ try:
         "data/sf_crime_50.csv",  # özet/temiz
     ]
     last_update_iso_sf = load_latest_crime_ts(crime_paths)
-    st.session_state["crime_last_update_iso"] = last_update_iso_sf 
 
     # events yine ayrı state'te dursun (hotspot/near-repeat için)
     _events_df = load_events_safe()
@@ -501,7 +500,7 @@ if sekme == "Operasyon":
     col1, col2 = st.columns([2.4, 1.0])
 
     with col1:
-        st.caption(f"Son güncelleme (SF): {st.session_state.get('crime_last_update_iso', '—')}")
+        st.caption(f"Son güncelleme (SF): {now_sf_iso()}")
 
         if btn_predict or st.session_state["agg"] is None:
             agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
