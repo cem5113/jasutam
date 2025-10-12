@@ -31,7 +31,7 @@ from utils.ui import (
     render_day_hour_heatmap as fallback_heatmap,
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from services.metrics import get_latest_metrics_from_artifact, artifact_location
+from services.metrics import compute_kpis
 # NOT: components.last_update.show_last_update_badge kullanılmıyor
 
 # Opsiyonel modüller
