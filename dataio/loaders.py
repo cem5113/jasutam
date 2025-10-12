@@ -1,64 +1,36 @@
 # dataio/loaders.py
+# --- imports (küçültüldü) ---
 from __future__ import annotations
 import os, io, zipfile, json, requests
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 import pandas as pd
-import json
-from typing import Dict, Any
 
+# --- paths ---
 _THIS = Path(__file__).resolve()
 _PROJECT_ROOT = _THIS.parents[2]
-_DATA_DIR = _PROJECT_ROOT / "data"
 
-def load_metadata() -> Dict[str, Any]:
-    # data/metadata.json varsa kullan; yoksa boş
-    f = _DATA_DIR / "metadata.json"
-    if f.exists():
-        try:
-            return json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
+# config’ten gelenleri ayrı isimlerde tutalım
+from config.settings import DATA_DIR as SETTINGS_DATA_DIR, RESULTS_DIR as SETTINGS_RESULTS_DIR
+DATA_DIR = Path(SETTINGS_DATA_DIR); DATA_DIR.mkdir(parents=True, exist_ok=True)
+RESULTS_DIR = Path(SETTINGS_RESULTS_DIR)
 
-# Ayarlar
-from config.settings import DATA_DIR as _DATA_DIR, RESULTS_DIR as _RESULTS_DIR
-
-DATA_DIR = Path(_DATA_DIR); DATA_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_DIR = Path(_RESULTS_DIR)
-
-# Ortam değişkenleri
-GITHUB_REPO          = os.getenv("GITHUB_REPO", "cem5113/crime_prediction_data")   # owner/repo
+# --- env ---
+GITHUB_REPO          = os.getenv("GITHUB_REPO", "cem5113/crime_prediction_data")
 GITHUB_WORKFLOW      = os.getenv("GITHUB_WORKFLOW", "full_pipeline.yml")
-GITHUB_ARTIFACT_NAME = os.getenv("GITHUB_ARTIFACT_NAME", "sutam-results")          # workflow'daki artifact name
+GITHUB_ARTIFACT_NAME = os.getenv("GITHUB_ARTIFACT_NAME", "sutam-results")
 GH_TOKEN             = os.getenv("GH_TOKEN", "")
+CRIME_CSV_URL        = os.getenv("CRIME_CSV_URL",
+    "https://github.com/cem5113/crime_prediction_data/releases/latest/download/sf_crime.csv")
+GEOID_LEN            = int(os.getenv("GEOID_LEN", "11"))
 
-# Release fallback (opsiyonel)
-CRIME_CSV_URL = os.getenv(
-    "CRIME_CSV_URL",
-    "https://github.com/cem5113/crime_prediction_data/releases/latest/download/sf_crime.csv",
-)
-
-# GEOID uzunluğu (grid ID padleme)
-GEOID_LEN = int(os.getenv("GEOID_LEN", "11"))
-
-# ----------------- yardımcılar -----------------
+# --- helpers ---
 def _headers():
     if not GH_TOKEN:
-        # GH_TOKEN yoksa artifact erişimini atla; caller try/except ile yakalıyor
         raise RuntimeError("GH_TOKEN yok (env). Artifact erişimi için gereklidir.")
-    return {
-        "Authorization": f"Bearer {GH_TOKEN}",
-        "Accept": "application/vnd.github+json",
-    }
+    return {"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json"}
 
 def _artifact_bytes(picks: List[str], artifact_name: Optional[str] = None) -> Optional[bytes]:
-    """
-    Son başarılı run’ın artifact’ından 'picks' içindeki ilk dosyayı döndürür (bytes).
-    - 'artifact_name' verilirse önce onunla eşleşeni arar; yoksa herhangi NON-expired artifact'ı dener.
-    - 'picks' hem tam ad hem de zip içindeki alt klasör (results/, out/, crime_prediction_data/) varyantlarını dener;
-      bulunamazsa sonek (endswith) eşleşmesi yapar.
-    """
     artifact_name = artifact_name or GITHUB_ARTIFACT_NAME
     runs_url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/runs?per_page=20"
     runs = requests.get(runs_url, headers=_headers(), timeout=30).json()
@@ -67,22 +39,19 @@ def _artifact_bytes(picks: List[str], artifact_name: Optional[str] = None) -> Op
     for rid in run_ids:
         arts_url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/runs/{rid}/artifacts"
         arts = requests.get(arts_url, headers=_headers(), timeout=30).json().get("artifacts", [])
-        # Önce isim eşleşen, yoksa herhangi NON-expired artifact
-        ordered = ([a for a in arts if a.get("name") == artifact_name and not a.get("expired", False)] or
-                   [a for a in arts if not a.get("expired", False)])
+        ordered = ([a for a in arts if a.get("name") == artifact_name and not a.get("expired", False)]
+                   or [a for a in arts if not a.get("expired", False)])
 
         for a in ordered:
             z = requests.get(a["archive_download_url"], headers=_headers(), timeout=60).content
             zf = zipfile.ZipFile(io.BytesIO(z))
             names = zf.namelist()
 
-            # 1) Tam ad denemesi (alt klasör varyantlarıyla)
             for p in picks:
                 for cand in (p, f"results/{p}", f"out/{p}", f"crime_prediction_data/{p}"):
                     if cand in names:
                         return zf.read(cand)
 
-            # 2) Sonek eşleşmesi (en yaygın)
             for n in names:
                 if any(n.endswith(p) for p in picks):
                     return zf.read(n)
@@ -92,9 +61,6 @@ def _normalize_geoid(s: pd.Series, L: int = GEOID_LEN) -> pd.Series:
     return s.astype(str).str.extract(r"(\d+)", expand=False).str[:L].str.zfill(L)
 
 def _ensure_time_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    date → pandas datetime (saat bilgisi varsa kaybetme), event_hour türet.
-    """
     out = df.copy()
     if "date" in out.columns:
         out["date"] = pd.to_datetime(out["date"], errors="coerce")
@@ -103,11 +69,11 @@ def _ensure_time_cols(df: pd.DataFrame) -> pd.DataFrame:
     else:
         out["date"] = pd.NaT
     if "event_hour" not in out.columns:
-        out["event_hour"] = pd.to_datetime(out["date"], errors="coerce").dt.hour.fillna(0).astype(int)
+        hours = pd.to_datetime(out["date"], errors="coerce").dt.hour
+        out["event_hour"] = hours.where(hours.notna(), None).fillna(0).astype(int)
     return out
 
 def _ensure_latlon(df: pd.DataFrame) -> pd.DataFrame:
-    # Şimdilik dokunma; UI tarafı lat/lon yoksa uyarı gösteriyor
     return df.copy()
 
 def _parse_and_cleanup(df: pd.DataFrame) -> pd.DataFrame:
@@ -120,20 +86,38 @@ def _parse_and_cleanup(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _cache_latest(df: pd.DataFrame) -> None:
-    """Her başarılı yüklemede yerel 'latest' alias'ını yaz."""
     try:
-        (DATA_DIR / "sf_crime_latest.csv").write_text(
-            df.to_csv(index=False), encoding="utf-8"
-        )
+        (DATA_DIR / "sf_crime_latest.csv").write_text(df.to_csv(index=False), encoding="utf-8")
     except Exception:
         pass
 
-# ----------------- public API -----------------
+# --- unified metadata loader (tek tanım!) ---
+def load_metadata() -> Dict[str, Any]:
+    """
+    Öncelik: results/metadata.json → artifact → {}
+    """
+    p = RESULTS_DIR / "metadata.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    try:
+        blob = _artifact_bytes(
+            picks=["metadata.json", "results/metadata.json", "out/metadata.json"],
+            artifact_name=GITHUB_ARTIFACT_NAME,
+        )
+        if blob:
+            return json.loads(blob.decode("utf-8"))
+    except Exception:
+        pass
+    return {}
+
+# --- public API ---
 def load_sf_crime_latest() -> Tuple[pd.DataFrame, str]:
     """
     Kaynak sırası:
       1) GitHub Actions artifact (ENV: GITHUB_ARTIFACT_NAME)
-            aranan dosyalar: results/sf_crime_latest.parquet|csv, sf_crime_latest.parquet|csv, sf_crime.csv, sf_crime_09.csv, metrics_all.csv
       2) Release (latest): sf_crime.csv
       3) RESULTS_DIR: sf_crime_latest.parquet|csv
       4) Yerel cache (data/)
@@ -147,17 +131,15 @@ def load_sf_crime_latest() -> Tuple[pd.DataFrame, str]:
         ]
         blob = _artifact_bytes(picks=picks, artifact_name=GITHUB_ARTIFACT_NAME)
         if blob:
-            # Önce CSV dene, olmazsa Parquet dene; her ikisi de başarısızsa tmp dosyadan dene
             try:
                 df = pd.read_csv(io.BytesIO(blob), low_memory=False)
             except Exception:
                 try:
-                    df = pd.read_parquet(io.BytesIO(blob))  # pyarrow gerektirir
+                    df = pd.read_parquet(io.BytesIO(blob))
                 except Exception:
                     tmp = DATA_DIR / "_artifact_tmp"
                     tmp.write_bytes(blob)
                     try:
-                        # İçeriğe göre her iki okuma da denenir
                         try:
                             df = pd.read_parquet(tmp)
                         except Exception:
@@ -182,14 +164,14 @@ def load_sf_crime_latest() -> Tuple[pd.DataFrame, str]:
     except Exception as e:
         print("release fallback başarısız:", e)
 
-    # 3) RESULTS_DIR (repo içinde üretilmiş alias dosyaları)
+    # 3) RESULTS_DIR
     for cand, tag in [
         (RESULTS_DIR / "sf_crime_latest.parquet", "results"),
         (RESULTS_DIR / "sf_crime_latest.csv",     "results"),
     ]:
         if cand.exists():
             try:
-                if str(cand.suffix).lower().endswith("parquet"):
+                if cand.suffix.lower() == ".parquet":
                     df = pd.read_parquet(cand)
                 else:
                     df = pd.read_csv(cand, low_memory=False)
@@ -200,7 +182,7 @@ def load_sf_crime_latest() -> Tuple[pd.DataFrame, str]:
                 print("RESULTS okumada hata:", e)
                 continue
 
-    # 4) Yerel DATA_DIR (cache ve bilinen adlar)
+    # 4) Yerel DATA_DIR cache
     for name in ["sf_crime_latest.csv", "sf_crime_artifact_cache.csv", "sf_crime_09.csv", "metrics_all.csv", "sf_crime.csv"]:
         p = DATA_DIR / name
         if p.exists():
@@ -212,30 +194,6 @@ def load_sf_crime_latest() -> Tuple[pd.DataFrame, str]:
             except Exception:
                 continue
 
-    # 5) Hiçbiri yoksa — UI düşmesin
-    df = pd.DataFrame({
-        "GEOID": [], "date": [], "event_hour": [], "crime_count": [],
-        "lat": [], "lon": []
-    })
+    # 5) boş
+    df = pd.DataFrame({"GEOID": [], "date": [], "event_hour": [], "crime_count": [], "lat": [], "lon": []})
     return df, "empty"
-
-def load_metadata() -> dict:
-    """
-    results/metadata.json → yoksa artifact’tan dene → yoksa {}
-    """
-    p = RESULTS_DIR / "metadata.json"
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    try:
-        blob = _artifact_bytes(
-            picks=["metadata.json", "results/metadata.json", "out/metadata.json"],
-            artifact_name=GITHUB_ARTIFACT_NAME,
-        )
-        if blob:
-            return json.loads(blob.decode("utf-8"))
-    except Exception:
-        pass
-    return {}
