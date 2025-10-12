@@ -6,11 +6,12 @@ import time
 import folium
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from services.metrics import get_latest_metrics, update_from_csv, METRICS_FILE
 import numpy as np
 import pandas as pd
 import streamlit as st
+import glob
+import os, io, glob
+from zipfile import ZipFile, BadZipFile
 from streamlit_folium import st_folium
 
 # Yerel paket yolları
@@ -30,6 +31,7 @@ from utils.ui import (
     render_day_hour_heatmap as fallback_heatmap,
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
+from services.metrics import get_latest_metrics_from_artifact, artifact_location
 from components.last_update import show_last_update_badge
 
 # Opsiyonel modüller
@@ -340,19 +342,6 @@ def top_risky_table(
 st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
-
-metrics = get_latest_metrics()
-if metrics:
-    col1, col2, col3 = st.columns(3)
-    if metrics.get("auc") is not None:
-        col1.metric("AUC (7g)", f"{metrics['auc']:.3f}")
-    if metrics.get("hit_rate_topk") is not None:
-        col2.metric("HitRate@TopK", f"{metrics['hit_rate_topk']*100:.1f}%")
-    if metrics.get("brier") is not None:
-        col3.metric("Brier Score", f"{metrics['brier']:.3f}")
-else:
-    # İstersen bu teşhis satırını kaldırabilirsin
-    st.caption(f"📊 KPI için ölçüm dosyası bulunamadı: {METRICS_FILE}")
 
 # Veri sonu
 try:
@@ -684,74 +673,91 @@ if sekme == "Operasyon":
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
+            
+        import streamlit as st
+        import pandas as pd
+        from dataio.loaders import load_sf_crime_latest
+        import time
         
-        # ── Güncel Model Metrikleri (artifact → JSON → göster) ───────────────────────
-        sf_now = datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)
-        label = f"Güncel Model Metrikleri ({sf_now.strftime('%Y-%m-%d')}, {sf_now.strftime('%H:%M')} SF time)"
-        st.subheader(label, anchor=False)
+        st.title("📊 Model Performans Metrikleri")
         
-        # 1) Artifact'tan otomatik güncelle (CSV/ZIP'i özyinelemeli arar)
-        with st.spinner("Artifact'tan metrikler çekiliyor..."):
+        # ─────────────────────────────────────────────────────────────
+        # 1️⃣ Spinner:  Görünür kalması için ufak gecikme eklendi
+        # ─────────────────────────────────────────────────────────────
+        with st.spinner("🔄 En güncel metrikler yükleniyor..."):
             try:
-                hit_col_env = os.environ.get("SUTAM_HIT_COL")            # örn: "hit_rate@100"
-                prefer_grp  = os.environ.get("SUTAM_METRICS_GROUP")       # opsiyonel (örn. "stacking")
-                update_from_csv(csv_path=None, hit_col=hit_col_env, prefer_group=prefer_grp)
-            except FileNotFoundError:
-                st.caption("⚠️ Artifact bulunamadı: metrics_all.csv düz dosya ya da ZIP içinde tespit edilemedi.")
+                df, src = load_sf_crime_latest()
+                time.sleep(1.5)  # Spinner'ın ekranda kısa süre görünmesini sağlar
             except Exception as e:
-                st.caption(f"⚠️ Artifact okuma/güncelleme hatası: {e}")
+                st.error(f"❌ Veri yüklenirken hata oluştu: {e}")
+                df = pd.DataFrame()
+                src = "error"
         
-        # 2) JSON'dan oku ve göster
-        m = get_latest_metrics()
-        if m:
-            # Öncelik: PR-AUC > ROC AUC/f1
-            pr_auc = m.get("pr_auc")
-            rocauc = m.get("auc")            # ROC AUC ya da f1 ile doldurulmuş olabilir
-            k_hit  = m.get("hit_rate_topk")
-            brier  = m.get("brier")
-        
-            cols = st.columns(3)
-            if pr_auc is not None:
-                cols[0].metric("PR-AUC", f"{pr_auc:.3f}")
-            elif rocauc is not None:
-                cols[0].metric("AUC (ROC/F1)", f"{rocauc:.3f}")
-            if k_hit is not None:
-                cols[1].metric("HitRate@TopK", f"{k_hit*100:.1f}%")
-            if brier is not None:
-                cols[2].metric("Brier Score", f"{brier:.3f}")
-        
-            # Kaynak ve seçim bilgisi
-            meta_bits = []
-            if m.get("model_name"):
-                meta_bits.append(f"Model: **{m['model_name']}**")
-            if m.get("selection_metric") and m.get("selection_value") is not None:
-                meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']:.3f}**")
-            try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
-            except Exception:
-                rel_path = METRICS_FILE
-            meta_bits.append(f"KPI JSON: `{rel_path}`")
-            if m.get("source_path"):
-                meta_bits.append(f"Kaynak: `{m['source_path']}`")
-            if m.get("timestamp"):
-                meta_bits.append(f"TS: {m['timestamp']}")
-            st.caption(" · ".join(meta_bits))
+        # ─────────────────────────────────────────────────────────────
+        # 2️⃣ Kaynak bilgisini göster
+        # ─────────────────────────────────────────────────────────────
+        if src == "artifact":
+            st.success("✅ Artifact'tan okundu")
+        elif src == "release":
+            st.info("📦 Release sürümünden okundu")
         else:
-            try:
-                rel_path = os.path.relpath(METRICS_FILE, PROJECT_ROOT)
-            except Exception:
-                rel_path = METRICS_FILE
-            st.caption(f"📊 KPI dosyası bulunamadı veya geçersiz ({rel_path}).")
-                
-        st.subheader("Dışa aktar")
-        if isinstance(a, pd.DataFrame) and not a.empty:
-            csv = a.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "CSV indir",
-                data=csv,
-                file_name=f"risk_export_{int(time.time())}.csv",
-                mime="text/csv",
-            )
+            st.warning(f"Yerel veya cache verisi kullanıldı ({src})")
+        
+        # ─────────────────────────────────────────────────────────────
+        # 3️⃣ En iyi modeli seçme fonksiyonu
+        # ─────────────────────────────────────────────────────────────
+        def pick_best_row(cand: pd.DataFrame):
+            cols = {c.lower(): c for c in cand.columns}
+            if cand.empty:
+                return None
+            sort_keys = []
+            if "pr_auc" in cols: sort_keys.append((cols["pr_auc"], False))
+            if "brier" in cols: sort_keys.append((cols["brier"], True))
+            if "log_loss" in cols: sort_keys.append((cols["log_loss"], True))
+            if "roc_auc" in cols: sort_keys.append((cols["roc_auc"], False))
+            if not sort_keys:
+                return cand.iloc[0]
+            by = [k for k, _ in sort_keys]
+            asc = [a for _, a in sort_keys]
+            return cand.sort_values(by=by, ascending=asc, kind="mergesort").iloc[0]
+        
+        # ─────────────────────────────────────────────────────────────
+        # 4️⃣ Metrikleri göster
+        # ─────────────────────────────────────────────────────────────
+        if df is not None and not df.empty:
+            st.subheader("📈 Model Metrikleri")
+            st.dataframe(df.head(10), use_container_width=True)
+        
+            best = pick_best_row(df)
+            if best is not None:
+                pr_auc = best.get("pr_auc")
+                rocauc = best.get("roc_auc")
+                brier = best.get("brier")
+        
+                c1, c2, c3 = st.columns(3)
+                if pd.notna(pr_auc):
+                    c1.metric("PR-AUC", f"{float(pr_auc):.3f}")
+                elif pd.notna(rocauc):
+                    c1.metric("ROC-AUC", f"{float(rocauc):.3f}")
+                if pd.notna(brier):
+                    c2.metric("Brier Score", f"{float(brier):.3f}")
+                if "hit_rate_topk" in best and pd.notna(best["hit_rate_topk"]):
+                    c3.metric("Hit@TopK", f"{best['hit_rate_topk']*100:.1f}%")
+        
+                serving_model = str(best.get("model", "unknown"))
+                model_group = str(best.get("group", ""))
+        
+                st.session_state["serving_model"] = serving_model
+                st.session_state["serving_group"] = model_group
+                st.caption(
+                    f"📦 Seçilen model: **{serving_model}**"
+                    + (f" · grup: `{model_group}`" if model_group else "")
+                    + (f" · metrik: **PR-AUC={pr_auc:.3f}**" if pd.notna(pr_auc) else "")
+                )
+            else:
+                st.warning("⚠️ En iyi satır seçilemedi.")
+        else:
+            st.error("❌ Metrik tablosu boş veya yüklenemedi.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
