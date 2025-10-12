@@ -619,24 +619,19 @@ if sekme == "Operasyon":
 
         st.subheader("Top-5 kritik GEOID")
         if isinstance(a, pd.DataFrame) and not a.empty:
-            tab = top_risky_table(
-                a, n=5, show_ci=show_advanced,
-                start_iso=st.session_state.get("start_iso"),
-                horizon_h=int(st.session_state.get("horizon_h") or 0),
-            )
-        
-            # 1) GEOID seçici (tabloyla aynı veri)
-            geoids = tab[KEY_COL].astype(str).tolist()
-            sel_gid = st.selectbox("GEOID seç (haritada odaklan):", geoids, key="top5_select")
-        
-            # 2) Tablonun kendisi
+            tab = top_risky_table(a, n=5, show_ci=show_advanced,
+                                  start_iso=st.session_state.get("start_iso"),
+                                  horizon_h=int(st.session_state.get("horizon_h") or 0))
             st.dataframe(tab, use_container_width=True, height=300)
         
-            # 3) Seçim değiştiyse durumu güncelle ve yeniden çiz
-            if sel_gid and st.session_state.get("explain", {}).get("geoid") != sel_gid:
-                st.session_state["explain"] = {"geoid": sel_gid}
-                st.experimental_rerun()
-        
+            st.markdown("Seç / odağı haritada göster:")
+            cols = st.columns(len(tab))
+            for i, row in enumerate(tab.itertuples()):
+                with cols[i]:
+                    if st.button(str(row.geoid)):
+                        st.session_state["explain"] = {"geoid": str(row.geoid)}
+                        st.experimental_rerun()
+
             st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
 
         st.subheader("Devriye özeti")
