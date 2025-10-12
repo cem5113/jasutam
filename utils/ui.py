@@ -16,9 +16,17 @@ try:
 except Exception:
     KEY_COL = "GEOID"
     CRIME_TYPES = []
-    SF_TZ_OFFSET = -7
+    SF_TZ_OFFSET = -7  # SF ≈ UTC-7 (yaz), fallback
 
-from utils.forecast import pois_pi90
+try:
+    from utils.forecast import pois_pi90
+except Exception:
+    # Basit ~90% PI yaklaşımı (gaussian approx) – sadece fallback
+    def pois_pi90(lam: float) -> tuple[int, int]:
+        s = float(np.sqrt(max(lam, 1e-9)))
+        lo = max(0.0, lam - 1.64 * s)
+        hi = lam + 1.64 * s
+        return int(round(lo)), int(round(hi))
 
 __all__ = [
     "SMALL_UI_CSS",
@@ -115,6 +123,15 @@ footer { visibility: hidden; }
 </style>
 """
 
+# ───────────────────────────── Yardımcılar ─────────────────────────────
+def _clean_latlon(df: pd.DataFrame, lat_col: str, lon_col: str) -> pd.DataFrame:
+    """Lat/Lon'u güvenli sayıya çevirir, NaN/inf atar."""
+    out = df[[lat_col, lon_col]].copy()
+    out[lat_col] = pd.to_numeric(out[lat_col], errors="coerce")
+    out[lon_col] = pd.to_numeric(out[lon_col], errors="coerce")
+    out = out.replace([np.inf, -np.inf], np.nan).dropna()
+    return out
+
 # ───────────────────────────── Başlık + mini açıklama yardımcıları ─────────────────────────────
 def title_with_help(level: int, text: str, help_text: str | None = None):
     """level=1/2/3 → h1/h2/h3. Hover'da küçük açıklama için title attr."""
@@ -201,55 +218,38 @@ def risk_window_text(start_iso: str, horizon_h: int) -> str:
     return f"{start:%H:%M}–{t2:%H:%M}"
 
 # ───────────────────────────── PALET / RENK EŞLEYİCİ ─────────────────────────────
-# -*- coding: utf-8 -*-
-# ───────────────────────────── PALET / RENK EŞLEYİCİ (REVİZE) ─────────────────────────────
-# 5'li skala (en kapsamlı)
 PALETTE_5: dict[str, str] = {
-    "Çok Yüksek": "#EF3B2C",  # koyu kırmızı
-    "Yüksek":     "#FFC07A",  # kırmızı
-    "Orta":       "#4A90D9",  # turuncu
-    "Düşük":      "#6BAED6",  # mavi
-    "Çok Düşük":  "#C6DBEF",  # açık mavi
+    "Çok Yüksek": "#EF3B2C",
+    "Yüksek":     "#FFC07A",
+    "Orta":       "#4A90D9",
+    "Düşük":      "#6BAED6",
+    "Çok Düşük":  "#C6DBEF",
 }
-
-# 4'lü skala
 PALETTE_4: dict[str, str] = {
-    "Çok Yüksek": "#EF3B2C",  # koyu kırmızı
-    "Yüksek":     "#FFC07A",  # kırmızı
-    "Orta":       "#4A90D9",  # turuncu
-    "Düşük":      "#6BAED6",  # mavi
+    "Çok Yüksek": "#EF3B2C",
+    "Yüksek":     "#FFC07A",
+    "Orta":       "#4A90D9",
+    "Düşük":      "#6BAED6",
 }
-
-# 3'lü skala (geriye uyumluluk)
 PALETTE_3: dict[str, str] = {
-    "Yüksek":     "#FFC07A",  # kırmızı
-    "Orta":       "#4A90D9",  # turuncu
-    "Düşük":      "#6BAED6",  # mavi
+    "Yüksek":     "#FFC07A",
+    "Orta":       "#4A90D9",
+    "Düşük":      "#6BAED6",
 }
-
 _TIER_ALIASES: dict[str, str] = {
-    # yüksek aile
     "cok yuksek": "Çok Yüksek", "çok yüksek": "Çok Yüksek",
     "yuksek":     "Yüksek",     "yüksek":     "Yüksek",
-    # orta
     "orta":       "Orta",
     "dusuk":      "Düşük",      "düşük":      "Düşük",
     "cok dusuk":  "Çok Düşük",  "çok düşük":  "Çok Düşük",
 }
-
 def _normalize_tier(t: str | None) -> str | None:
-    """Etiketi normalize et (aksan/küçük-büyük/boşluk farklılıklarına dayanıklı)."""
-    if t is None:
-        return None
+    if t is None: return None
     key = str(t).strip()
     low = key.lower()
     return _TIER_ALIASES.get(low, key)
 
 def _pick_palette_from_labels(labels: list[str]) -> dict[str, str]:
-    """
-    DataFrame'deki etiketlere göre en uygun paleti seç.
-    Öncelik: 5'li → 4'lü → 3'lü.
-    """
     norm = {_normalize_tier(x) for x in labels if x is not None}
     if {"Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"}.issubset(norm):
         return PALETTE_5
@@ -258,15 +258,11 @@ def _pick_palette_from_labels(labels: list[str]) -> dict[str, str]:
     return PALETTE_3
 
 def color_for_tier(tier: str, palette: dict[str, str] | None = None) -> str:
-    """
-    Tier → HEX renk. Palet belirtilmezse birleşik havuzdan bakar,
-    eşleşme yoksa açık mavi (#9ecae1) döner.
-    """
     pal_merged: dict[str, str] = {**PALETTE_5, **PALETTE_4, **PALETTE_3}
     pal = palette or pal_merged
     t = _normalize_tier(tier)
     return pal.get(t, "#9ecae1")
-    
+
 # ───────────────────────────── SONUÇ KARTI ─────────────────────────────
 def render_result_card(df_agg: pd.DataFrame, geoid: str, start_iso: str, horizon_h: int):
     if df_agg is None or df_agg.empty or geoid is None:
@@ -368,7 +364,7 @@ def build_map_fast(
     perm_hotspot_layer_name: str = "Hotspot (kalıcı)",
     temp_hotspot_layer_name: str = "Hotspot (geçici)",
 ) -> "folium.Map":
-    # Base map: custom TileLayer to keep attribution visible
+    # Base map
     m = folium.Map(location=[37.7749, -122.4194], zoom_start=12, tiles=None)
     folium.TileLayer(
         tiles="CartoDB positron",
@@ -384,7 +380,7 @@ def build_map_fast(
     df_agg = df_agg.copy()
     df_agg[KEY_COL] = df_agg[KEY_COL].astype(str)
 
-    # Dinamik paleti, df içindeki tier etiketlerinden seç
+    # Dinamik palet
     labels_present = sorted(map(str, df_agg.get("tier", pd.Series(dtype=str)).dropna().unique()))
     palette = _pick_palette_from_labels(labels_present)
 
@@ -603,14 +599,10 @@ def build_map_fast(
         except Exception:
             pass
 
-    # Katman kontrolü (ikon halinde kapalı)
+    # Katman kontrolü
     try:
         if add_layer_control:
-            folium.LayerControl(
-                collapsed=True,
-                position="topright",
-                autoZIndex=True
-            ).add_to(m)
+            folium.LayerControl(collapsed=True, position="topright", autoZIndex=True).add_to(m)
     except Exception:
         pass
 
@@ -645,12 +637,12 @@ def build_map_fast(
 
     return m
 
-# ───────────── Gün × Saat Isı Matrisi ─────────────
+# ───────────── Gün × Saat Isı Matrisi (Fallback/Quick) ─────────────
 def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, horizon_h: int | None = None):
     """
-    Fallback 7×24 ısı matrisi:
-    - Model saatlik üretmiyorsa şehir toplam bekleneni, ufuk içindeki (dow,hour)
-      frekansına göre dağıtır (günler eşit olmaz).
+    Hızlı 7×24 ısı matrisi:
+    - Şehir toplam 'expected' değerini, seçilen ufukta (dow,hour) ağırlıklarına dağıtır.
+    - Ağırlık: diurnal (2 harmonik) × gün modu (hafta içi/sonu farklı). Her gün ve saat farklı çıkar.
     - start_iso/horizon_h yoksa 24 saatlik ufuk varsayar.
     """
     if agg is None or agg.empty:
@@ -666,33 +658,40 @@ def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, hor
     if H <= 0:
         H = 24
 
-    # 2) SF yereline çevir & (dow,hour) frekansı
-    start = start.replace(minute=0, second=0, microsecond=0)
-    start_sf = start + pd.Timedelta(hours=SF_TZ_OFFSET)
-    hours = [start_sf + pd.Timedelta(hours=i) for i in range(H)]
-    freq = (
-        pd.DataFrame({"dow": [h.weekday() for h in hours], "hour": [h.hour for h in hours]})
-        .value_counts(["dow", "hour"]).rename("freq").reset_index()
-    )
-
-    # 3) Şehir toplam beklenen
+    # 2) Toplam beklenen (şehir)
     total_expected = float(
         pd.to_numeric(agg.get("expected", pd.Series(dtype=float)), errors="coerce")
           .replace([np.inf, -np.inf], np.nan)
           .fillna(0).clip(lower=0).sum()
     )
+    if total_expected <= 0:
+        st.caption("Toplam beklenen 0 olduğu için ısı matrisi oluşturulamadı.")
+        return
 
-    # 4) Paylara göre dağıt ve pivotla
-    share = freq["freq"] / float(freq["freq"].sum() or 1.0)
-    freq["E_city"] = total_expected * share
+    # 3) 7×24 ağırlıklar (default profil)
+    h = np.arange(24, dtype=float)
+    diurnal = 1.0 + 0.45*np.sin(((h-18)/24)*2*np.pi) + 0.15*np.sin(((h-6)/24)*4*np.pi)
+    diurnal -= diurnal.min()
+    diurnal = diurnal / (diurnal.sum() + 1e-12)
+    dow_mod = np.array([0.95, 0.98, 1.01, 1.00, 1.06, 1.13, 1.17], dtype=float)  # Mon→Sun
+    dow_mod /= (dow_mod.sum()/7.0)
 
-    mat = (freq.pivot(index="dow", columns="hour", values="E_city")
-               .reindex(range(7)).fillna(0.0))
-    mat.index = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-    mat.columns = [f"{h:02d}" for h in mat.columns]
+    W = (dow_mod[:, None] * diurnal[None, :]).astype(float)
+
+    # 4) Ufuktaki saatleri SF'e çevirip ağırlıkları çek
+    start = start.replace(minute=0, second=0, microsecond=0)
+    start_sf = start + pd.Timedelta(hours=SF_TZ_OFFSET)
+    hours = [start_sf + pd.Timedelta(hours=i) for i in range(H)]
+    w_vec = np.array([W[t.weekday(), t.hour] for t in hours], dtype=float)
+    w_vec = w_vec / (w_vec.sum() + 1e-12)
+
+    # 5) 7×24 matrisi doldur
+    idx = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+    mat = pd.DataFrame(0.0, index=idx, columns=[f"{i:02d}" for i in range(24)])
+    for t, ww in zip(hours, w_vec):
+        mat.loc[idx[t.weekday()], f"{t.hour:02d}"] += total_expected * float(ww)
 
     st.dataframe(mat.round(2), use_container_width=True)
     arr = mat.to_numpy()
     i, j = np.unravel_index(np.argmax(arr), arr.shape)
     st.caption(f"Toplam beklenen: {total_expected:.2f} • En yoğun: {mat.index[i]} {mat.columns[j]}")
-
