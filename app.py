@@ -32,7 +32,7 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from services.metrics import get_latest_metrics_from_artifact, artifact_location
-# NOT: components.last_update.show_last_update_badge artık kullanılmıyor
+# NOT: components.last_update.show_last_update_badge kullanılmıyor
 
 # Opsiyonel modüller
 try:
@@ -120,20 +120,23 @@ def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rn: dict[str, str] = {}
     if "centroid_lat" not in out.columns:
-        if "Centroid_Lat" in out.columns: rn["Centroid_Lat"] = "centroid_lat"
-        if "CENTROID_LAT" in out.columns: rn["CENTROID_LAT"] = "centroid_lat"
-        if "lat" in out.columns and "centroid_lon" in out.columns: rn["lat"] = "centroid_lat"
+        if "Centroid_Lat" in out.columns:
+            rn["Centroid_Lat"] = "centroid_lat"
+        if "CENTROID_LAT" in out.columns:
+            rn["CENTROID_LAT"] = "centroid_lat"
+        if "lat" in out.columns and "centroid_lon" in out.columns:
+            rn["lat"] = "centroid_lat"
     if "centroid_lon" not in out.columns:
-        if "Centroid_Lon" in out.columns: rn["Centroid_Lon"] = "centroid_lon"
-        if "CENTROID_LON" in out.columns: rn["CENTROID_LON"] = "centroid_lon"
-        if "lon" in out.columns and "centroid_lat" in out.columns: rn["lon"] = "centroid_lon"
+        if "Centroid_Lon" in out.columns:
+            rn["Centroid_Lon"] = "centroid_lon"
+        if "CENTROID_LON" in out.columns:
+            rn["CENTROID_LON"] = "centroid_lon"
+        if "lon" in out.columns and "centroid_lat" in out.columns:
+            rn["lon"] = "centroid_lon"
     return out.rename(columns=rn) if rn else out
 
 def now_sf_iso() -> str:
     return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).isoformat(timespec="seconds")
-
-def now_sf_hm() -> str:
-    return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).strftime("%Y-%m-%d %H:%M")
 
 def load_events_safe(path: str = "data/events.csv") -> pd.DataFrame:
     try:
@@ -181,8 +184,8 @@ def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: in
 
 def render_top_badge(model_version: str, last_train: str, last_update_iso: str, daily_time_label: str = "19:00"):
     """
-    Üst bilgi satırı:
-    SUTAM • Model • Son eğitim • Günlük güncellenir • Son güncelleme (SF) • Şu an (SF)
+    Üst bilgi satırı (tek satır):
+    SUTAM • Model • Son eğitim • Günlük güncellenir • Son güncelleme (SF)
     """
     parts = [
         "**SUTAM**",
@@ -190,7 +193,6 @@ def render_top_badge(model_version: str, last_train: str, last_update_iso: str, 
         f"• Son eğitim: {last_train}",
         f"• Günlük güncellenir: ~{daily_time_label} (SF)",
         f"• Son güncelleme (SF): {last_update_iso}",
-        f"• Şu an (SF): {now_sf_hm()}",
     ]
     st.markdown(" ".join(parts))
 
@@ -222,6 +224,7 @@ def run_prediction(
         filters=filters,
     )
 
+    # Sağlam kademe sınıflayıcı: expected → ['Çok Düşük','Düşük','Orta','Yüksek','Çok Yüksek']
     def assign_tier_safe(agg_in: pd.DataFrame) -> pd.DataFrame:
         if agg_in is None or agg_in.empty or "expected" not in agg_in.columns:
             return agg_in
@@ -235,17 +238,21 @@ def run_prediction(
         out["expected"] = x
         labels5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
 
+        # Veri çeşitliliği azsa tek seviyeye düş
         if x.nunique(dropna=True) < 5 or x.count() < 5:
             out["tier"] = "Çok Düşük"
             return out
 
+        # qcut ile dene
         try:
             out["tier"] = pd.qcut(x, q=5, labels=labels5, duplicates="drop").astype(str)
-            if out["tier"].isna().all(): raise ValueError("qcut collapsed")
+            if out["tier"].isna().all():
+                raise ValueError("qcut collapsed")
             return out
         except Exception:
             pass
 
+        # Elle kantil: epsilon ile kenarları ayır
         try:
             q = np.quantile(x.to_numpy(), [0.20, 0.40, 0.60, 0.80]).astype(float)
             eps = max(1e-9, 1e-6 * float(np.nanmax(x) - np.nanmin(x)))
@@ -261,10 +268,14 @@ def run_prediction(
             p90 = float(np.nanquantile(x, 0.90))
 
             def fallback(v: float) -> str:
-                if v <= med * 0.5: return "Çok Düşük"
-                if v <= med: return "Düşük"
-                if v <= p75: return "Orta"
-                if v <= p90: return "Yüksek"
+                if v <= med * 0.5:
+                    return "Çok Düşük"
+                if v <= med:
+                    return "Düşük"
+                if v <= p75:
+                    return "Orta"
+                if v <= p90:
+                    return "Yüksek"
                 return "Çok Yüksek"
 
             out["tier"] = [fallback(float(v)) for v in x]
@@ -273,6 +284,7 @@ def run_prediction(
     agg = assign_tier_safe(agg)
     agg = ensure_keycol(agg, KEY_COL)
 
+    # Uzun ufuk referansı (30 gün geriden bugüne)
     try:
         long_start_iso = (
             datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET - 30 * 24)
@@ -305,6 +317,7 @@ def top_risky_table(
     lam = df["expected"].to_numpy()
     df["P(≥1)%"] = [round(prob_ge_k(l, 1) * 100, 1) for l in lam]
 
+    # Saat aralığı (SF)
     try:
         if start_iso:
             _start = pd.to_datetime(start_iso)
@@ -334,11 +347,10 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-# ► TEK KAYNAK: Son güncelleme (SF) — alttaki ve üstteki aynı değişkeni kullanır
-LAST_UPDATE_ISO_SF = now_sf_iso()              # 2025-10-12T00:29:xx
-st.session_state["crime_last_update_iso"] = LAST_UPDATE_ISO_SF  # ileride gerekirse
+# ► TEK KAYNAK (üst bant için): Son güncelleme (SF)
+LAST_UPDATE_ISO_SF = now_sf_iso()  # saniyeli ISO-8601
 
-# ÜST BİLGİ SATIRI (istenen biçim)
+# ÜST BANT — yalnızca BİR KEZ "Son güncelleme (SF)" gösterilir
 render_top_badge(
     model_version=MODEL_VERSION,
     last_train=MODEL_LAST_TRAIN,
@@ -424,9 +436,7 @@ if sekme == "Operasyon":
     col1, col2 = st.columns([2.4, 1.0])
 
     with col1:
-        # ALTTA DA AYNI DEĞER: tek kaynaktan
-        st.caption(f"Son güncelleme (SF): {LAST_UPDATE_ISO_SF}")
-
+        # NOT: Buradaki alt yazıda "Son güncelleme (SF)" ARTIK YOK (tekrarı engellemek için)
         if btn_predict or st.session_state["agg"] is None:
             agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
             st.session_state.update(
