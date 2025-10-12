@@ -618,12 +618,18 @@ if sekme == "Operasyon":
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
         st.subheader("Top-5 kritik GEOID")
-        if isinstance(a, pd.DataFrame) and not a.empty:
-            tab = top_risky_table(a, n=5, show_ci=show_advanced,
-                                  start_iso=st.session_state.get("start_iso"),
-                                  horizon_h=int(st.session_state.get("horizon_h") or 0))
-            st.dataframe(tab, use_container_width=True, height=300)
         
+        a = st.session_state.get("agg")
+        if isinstance(a, pd.DataFrame) and not a.empty:
+            tab = top_risky_table(
+                a, n=5, show_ci=True,
+                start_iso=st.session_state.get("start_iso"),
+                horizon_h=int(st.session_state.get("horizon_h") or 0),
+            )
+        
+            st.dataframe(tab, use_container_width=True)
+        
+            # GEOID butonları
             st.markdown("Seç / odağı haritada göster:")
             cols = st.columns(len(tab))
             for i, row in enumerate(tab.itertuples()):
