@@ -337,6 +337,12 @@ with st.sidebar:
     duty_minutes = st.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
     cell_minutes = st.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
 
+    run_hourly_heatmap = st.checkbox(
+        "Isı matrisi için saatlik (gerçek) tahmin (yavaş)",
+        value=False,
+        help="Her saat için 1 saatlik model çalıştırır (24/48/168 kez). Yavaş olabilir."
+    )
+    
     colA, colB = st.columns(2)
     btn_predict = colA.button("Tahmin et")
     btn_patrol  = colB.button("Devriye öner")
