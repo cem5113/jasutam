@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # ── Uygulama adı ───────────────────────────────────────────────────────────────
-APP_NAME: str = os.getenv("APP_NAME", "SUTAM – Suç Tahmin Modeli")
+APP_NAME = "SUTAM"
 
 # ── Zaman / biçimler ──────────────────────────────────────────────────────────
 TZ_SF: str = os.getenv("TZ_SF", "America/Los_Angeles")
