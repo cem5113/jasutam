@@ -141,34 +141,43 @@ def aggregate_fast(
     nr_decay_h: float = 12.0,
     filters: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
+    """
+    Not: Toplam beklenenin ufukla (H) doğru orantılı artması için saat ağırlıkları
+    önce 1'e normalize edilir, sonra H ile ÇARPILIR.
+    """
+    # --- 1) Zaman ağırlıkları (sadece diurnal) ---
     start = datetime.fromisoformat(start_iso)
     H = max(int(horizon_h), 1)
+    hours = np.arange(H)
+    # gün içi dalga (tepe ≈ 18:00)
+    diurnal = 1.0 + 0.4 * np.sin((((start.hour + hours) % 24 - 18) / 24.0) * 2.0 * np.pi)
+    # normalize et, sonra H ile ölçekle → toplam ağırlık = H
+    w = diurnal / (diurnal.sum() + 1e-12)
+    w = H * w  # <<< kritik: ufuk çarpanı
 
-    # Events'ten (24,7) zaman ağırlıkları
-    hour_w24, dow_w7 = _build_time_weights_from_events(events)
+    # --- 2) Near-repeat skoru ---
+    nr = _near_repeat_score(
+        geo_df,
+        events,
+        start_iso,
+        lookback_h=nr_lookback_h,
+        spatial_radius_m=nr_radius_m,
+        temporal_decay_h=nr_decay_h,
+    )
 
-    # Ufuk boyunca her saat için (hour,dow) ağırlığı
-    # Not: start_iso uygulama tarafından SF lokaline göre üretildiği için yeniden ofset eklemiyoruz.
-    t_list = [start + timedelta(hours=i) for i in range(H)]
-    w = np.array([hour_w24[t.hour] * dow_w7[t.weekday()] for t in t_list], dtype=float)
-    w = w / (w.sum() + 1e-12)         
-    w = H * w                       
-
-    # near-repeat
-    nr = _near_repeat_score( ... )
-
-    # saatlik lambda ve kırpmalar
+    # --- 3) Saatlik lambda ve kırpma ---
     base_per_hour = k_lambda * base_int  # hücre başına saatlik baz oran
     lam_hour = base_per_hour[:, None] * w[None, :]
-    lam_hour *= (1.0 + near_repeat_alpha * nr[:, None])
+    lam_hour *= (1.0 + near_repeat_alpha * nr[:, None])  # NR etkisi
     lam_hour = np.clip(lam_hour, 0.0, 0.9)
 
-    expected = lam_hour.sum(axis=1)
+    # --- 4) Özetler ---
+    expected = lam_hour.sum(axis=1)  # ufuk toplamı
     p_hour = 1.0 - np.exp(-lam_hour)
     q10 = np.quantile(p_hour, 0.10, axis=1)
     q90 = np.quantile(p_hour, 0.90, axis=1)
 
-    # tür dağılımı (CRIME_TYPES varsa onu kullan; yoksa stabil bir fallback)
+    # --- 5) Tür dağılımı ---
     rng = np.random.default_rng(42)
     if CRIME_TYPES and len(CRIME_TYPES) >= 1:
         alpha = np.full(len(CRIME_TYPES), 1.2)
@@ -189,7 +198,7 @@ def aggregate_fast(
         **type_cols,
     })
 
-    # ---- kategori filtresi (istenmişse) → expected yeniden hesap
+    # --- 6) Kategori filtresi istenmişse expected'i yeniden hesapla ---
     if filters:
         cats: Optional[Iterable[str]] = filters.get("cats")
         if cats:
@@ -200,14 +209,13 @@ def aggregate_fast(
             if wanted_cols:
                 out["expected"] = out[wanted_cols].sum(axis=1)
 
-    # ---- 5 kademeli tier (Q95 / Q75 / Q50 / Q25)
+    # --- 7) 5 kademeli tier ---
     if out["expected"].gt(0).any():
         q95 = float(out["expected"].quantile(0.95))
         q75 = float(out["expected"].quantile(0.75))
         q50 = float(out["expected"].quantile(0.50))
         q25 = float(out["expected"].quantile(0.25))
     else:
-        # tümü 0 ise sabit eşikler
         q95 = q75 = q50 = q25 = 0.0
 
     out["tier"] = np.select(
