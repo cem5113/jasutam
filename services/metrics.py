@@ -7,10 +7,87 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Optional, Iterable, Tuple
 from zipfile import ZipFile, BadZipFile
-
+from services.metrics import get_latest_metrics_from_artifact, artifact_location
 import pandas as pd
 
+with st.spinner("Artifact'tan metrikler çekiliyor..."):
+    try:
+        # CSV'yi yükle
+        df = pd.read_csv(ARTIFACT_CSV)
+        if df.empty:
+            m = {}
+        else:
+            cand = df.copy()
 
+            # "en iyi" satırı seçme mantığı:
+            def best(col, asc=False):
+                return (
+                    cand.sort_values(col, ascending=asc, kind="mergesort").iloc[0]
+                    if col in cand.columns and cand[col].notna().any()
+                    else None
+                )
+
+            row = (
+                best("hit_rate_topk", False)
+                or best("pr_auc", False)
+                or best("auc", False)
+                or best("brier", True)
+                or cand.iloc[0]
+            )
+
+            # Özet sözlük
+            m = {}
+            for col in ["model_name", "group", "pr_auc", "auc", "brier", "hit_rate_topk", "timestamp"]:
+                if col in row.index:
+                    val = row[col]
+                    if isinstance(val, float) and pd.isna(val):
+                        val = None
+                    m[col] = val
+
+            # Seçim bilgisi
+            if "hit_rate_topk" in row.index and pd.notna(row["hit_rate_topk"]):
+                m["selection_metric"] = "hit_rate_topk"; m["selection_value"] = float(row["hit_rate_topk"])
+            elif "pr_auc" in row.index and pd.notna(row["pr_auc"]):
+                m["selection_metric"] = "pr_auc";       m["selection_value"] = float(row["pr_auc"])
+            elif "auc" in row.index and pd.notna(row["auc"]):
+                m["selection_metric"] = "auc";          m["selection_value"] = float(row["auc"])
+            elif "brier" in row.index and pd.notna(row["brier"]):
+                m["selection_metric"] = "brier";        m["selection_value"] = float(row["brier"])
+
+            m["source_path"] = ARTIFACT_CSV  # şeffaflık için
+    except Exception as e:
+        m = {}
+        st.caption(f"⚠️ Metrics CSV okunamadı: {e}")
+
+if m:
+    pr_auc = m.get("pr_auc")
+    rocauc = m.get("auc")
+    k_hit  = m.get("hit_rate_topk")
+    brier  = m.get("brier")
+
+    cols = st.columns(3)
+    if pr_auc is not None:
+        cols[0].metric("PR-AUC", f"{pr_auc:.3f}")
+    elif rocauc is not None:
+        cols[0].metric("AUC (ROC/F1)", f"{rocauc:.3f}")
+    if k_hit is not None:
+        cols[1].metric("HitRate@TopK", f"{k_hit*100:.1f}%")
+    if brier is not None:
+        cols[2].metric("Brier Score", f"{brier:.3f}")
+
+    meta_bits = []
+    if m.get("model_name"):
+        meta_bits.append(f"Model: **{m['model_name']}**")
+    if m.get("selection_metric") and m.get("selection_value") is not None:
+        meta_bits.append(f"Seçim: **{m['selection_metric']}={m['selection_value']:.3f}**")
+    if m.get("source_path"):
+        meta_bits.append(f"Kaynak: `{m['source_path']}`")
+    if m.get("timestamp"):
+        meta_bits.append(f"TS: {m['timestamp']}")
+    st.caption(" · ".join(meta_bits))
+else:
+    st.caption(f"📊 Metrics CSV bulunamadı veya boş: `{ARTIFACT_CSV}`")
+                                                                                              
 # -----------------------------------------------------------------------------
 # Çözümleyiciler
 # -----------------------------------------------------------------------------
