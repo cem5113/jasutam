@@ -14,13 +14,6 @@ import os, io, glob
 from zipfile import ZipFile, BadZipFile
 from streamlit_folium import st_folium
 
-# ── AgGrid (satıra tıklama için) ─────────────────────────────────────────────
-try:
-    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode  # type: ignore
-    HAS_AGGRID = True
-except ModuleNotFoundError:
-    HAS_AGGRID = False
-
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -596,7 +589,7 @@ if sekme == "Operasyon":
         if info and info.get("geoid"):
             render_result_card(agg, info["geoid"], start_iso, horizon_h)
         else:
-            st.info("Haritada bir hücreye tıklayın veya tablodan seçin; kart burada görünecek.")
+            st.info("Haritada bir hücreye tıklayın; kart burada görünecek.")
 
     # Sağ panel – özetler
     with col2:
@@ -605,11 +598,11 @@ if sekme == "Operasyon":
         if isinstance(a, pd.DataFrame) and not a.empty:
             kpi_expected = round(float(a["expected"].sum()), 2)
             cnts = {
-                "Çok Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Çok Yüksek").sum() ),
-                "Yüksek":     int((a.get("tier", pd.Series(dtype=str)) == "Yüksek").sum()     ),
-                "Orta":       int((a.get("tier", pd.Series(dtype=str)) == "Orta").sum()       ),
-                "Düşük":      int((a.get("tier", pd.Series(dtype=str)) == "Düşük").sum()      ),
-                "Çok Düşük":  int((a.get("tier", pd.Series(dtype=str)) == "Çok Düşük").sum()  ),
+                "Çok Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Çok Yüksek").sum()),
+                "Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Yüksek").sum()),
+                "Orta": int((a.get("tier", pd.Series(dtype=str)) == "Orta").sum()),
+                "Düşük": int((a.get("tier", pd.Series(dtype=str)) == "Düşük").sum()),
+                "Çok Düşük": int((a.get("tier", pd.Series(dtype=str)) == "Çok Düşük").sum()),
             }
             render_kpi_row(
                 [
@@ -624,9 +617,8 @@ if sekme == "Operasyon":
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
-        # ── Top-5: AgGrid ile satır tıklama ───────────────────────────────────
         st.subheader("Top-5 kritik GEOID")
-
+        
         a = st.session_state.get("agg")
         if isinstance(a, pd.DataFrame) and not a.empty:
             tab = top_risky_table(
@@ -634,37 +626,19 @@ if sekme == "Operasyon":
                 start_iso=st.session_state.get("start_iso"),
                 horizon_h=int(st.session_state.get("horizon_h") or 0),
             )
-
-            if HAS_AGGRID:
-                gb = GridOptionsBuilder.from_dataframe(tab)
-                gb.configure_selection(selection_mode="single", use_checkbox=False)
-                gb.configure_grid_options(
-                    rowSelection="single",
-                    suppressRowClickSelection=False,
-                    animateRows=True,
-                )
-                gb.configure_column("geoid", header_name="geoid",
-                                    cellStyle={"fontWeight": "600", "cursor": "pointer"})
-                grid_options = gb.build()
-
-                grid_resp = AgGrid(
-                    tab,
-                    gridOptions=grid_options,
-                    update_mode=GridUpdateMode.SELECTION_CHANGED,
-                    height=220,
-                    fit_columns_on_grid_load=True
-                )
-
-                if grid_resp and grid_resp.get("selected_rows"):
-                    sel_geoid = str(grid_resp["selected_rows"][0]["geoid"])
-                    if st.session_state.get("explain", {}).get("geoid") != sel_geoid:
-                        st.session_state["explain"] = {"geoid": sel_geoid}
+        
+            st.dataframe(tab, use_container_width=True)
+        
+            # GEOID butonları
+            st.markdown("Seç / odağı haritada göster:")
+            cols = st.columns(len(tab))
+            for i, row in enumerate(tab.itertuples()):
+                with cols[i]:
+                    if st.button(str(row.geoid)):
+                        st.session_state["explain"] = {"geoid": str(row.geoid)}
                         st.experimental_rerun()
-            else:
-                st.dataframe(tab, use_container_width=True, height=220)
-                st.info("Satıra tıklama için: `pip install streamlit-aggrid` kurun ve uygulamayı yeniden başlatın.")
-        else:
-            st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
+
+            st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
 
         st.subheader("Devriye özeti")
         if isinstance(a, pd.DataFrame) and not a.empty and st.session_state.get("agg") is not None and btn_patrol:
