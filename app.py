@@ -9,10 +9,10 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
-import glob
 import os, io, glob
 from zipfile import ZipFile, BadZipFile
 from streamlit_folium import st_folium
+from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 
 # Yerel paket yolları
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -23,27 +23,33 @@ if PROJECT_ROOT not in sys.path:
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
 from utils.patrol import allocate_patrols
+
 from utils.ui import (
     SMALL_UI_CSS,
     render_result_card,
     build_map_fast,
-    render_kpi_row,
+    render_kpi_row,                                     # ← yazım hatası düzeltildi
     render_day_hour_heatmap as fallback_heatmap,
 )
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from services.metrics import compute_kpis
 
-# Opsiyonel modüller
+# Raporlar (opsiyonel)
 try:
     from components.report_view import render_reports  # type: ignore
     HAS_REPORTS = True
 except ModuleNotFoundError:
     HAS_REPORTS = False
-
     def render_reports(**kwargs):
         st.info("Raporlar modülü bulunamadı (components/report_view.py).")
 
-render_day_hour_heatmap = fallback_heatmap 
+# Isı matrisi fonksiyonu:
+#   - varsayılan: ui.py’deki sağlam fallback
+#   - utils/heatmap varsa onunla üstünü yaz
+render_day_hour_heatmap = fallback_heatmap
+try:
+    from utils.heatmap import render_day_hour_heatmap as _render_hm  # type: ignore
+    render_day_hour_heatmap = _render_hm
+except Exception:
+    pass
 
 try:
     from utils.deck import build_map_fast_deck  # type: ignore
@@ -417,9 +423,9 @@ with st.sidebar:
     run_hourly_heatmap = st.checkbox(
         "Isı matrisi için saatlik (gerçek) tahmin (yavaş)",
         value=False,
-        help="Her saat için model çalıştırır; 24/48/168 kez. Yavaş olabilir."
+        help="Her saat için 1 saatlik model çalıştırır (24/48/168 kez). Yavaş olabilir."
     )
-
+    
     colA, colB = st.columns(2)
     btn_predict = colA.button("Tahmin et")
     btn_patrol  = colB.button("Devriye öner")
@@ -690,8 +696,13 @@ if sekme == "Operasyon":
                         nr_decay_h=12.0,
                         filters=filters,
                     )
-                    tot = float(pd.to_numeric(agg_i.get("expected", pd.Series(dtype=float)), errors="coerce")
-                                .clip(lower=0).sum())
+                    tot = float(
+                        pd.to_numeric(agg_i.get("expected", pd.Series(dtype=float)), errors="coerce")
+                          .replace([np.inf, -np.inf], np.nan)
+                          .fillna(0)
+                          .clip(lower=0)
+                          .sum()
+                    )
                     t_sf = (start + pd.to_timedelta(i, unit="h")) + pd.Timedelta(hours=SF_TZ_OFFSET)
                     rows.append({"dow": t_sf.weekday(), "hour": t_sf.hour, "E_city": tot})
         
