@@ -32,7 +32,7 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from services.metrics import get_latest_metrics_from_artifact, artifact_location
-from components.last_update import show_last_update_badge
+# from components.last_update import show_last_update_badge  # KULLANILMIYOR: üst satırı kendimiz yazıyoruz
 
 # Opsiyonel modüller
 try:
@@ -120,7 +120,7 @@ def _parse_latest_ts(df: pd.DataFrame) -> Optional[pd.Timestamp]:
 def load_latest_crime_ts(paths: list[str]) -> Optional[str]:
     """
     Verilen dosya sırasına göre ilk bulunan dosyadan en güncel zamanı alır
-    ve SF saatine çevirip ISO-8601 string döner.
+    ve SF saatine çevirip ISO-8601 string döner (ss dahil).
     """
     for p in paths:
         try:
@@ -130,12 +130,10 @@ def load_latest_crime_ts(paths: list[str]) -> Optional[str]:
             if p.lower().endswith((".parquet", ".pq")):
                 df = pd.read_parquet(p)
             else:
-                # Büyük dosyalarda hızlı şema tahmini için dtype'ları zorlamıyoruz
                 df = pd.read_csv(p, low_memory=False)
             latest_utc = _parse_latest_ts(df)
             if latest_utc is not None:
                 latest_sf = latest_utc + pd.Timedelta(hours=SF_TZ_OFFSET)
-                # İstersen saatli gösterim istiyorsan timespec="minutes" yapabilirsin
                 return latest_sf.isoformat(timespec="seconds")
         except Exception:
             # Bir dosyada hata olursa sıradakine geç
@@ -159,7 +157,6 @@ def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
         out[want] = out[want].astype(str)
     return out
 
-
 def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Centroid kolon adlarını standardize eder (centroid_lat/lon)."""
     if df is None or df.empty:
@@ -182,10 +179,11 @@ def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
             rn["lon"] = "centroid_lon"
     return out.rename(columns=rn) if rn else out
 
-
 def now_sf_iso() -> str:
     return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).isoformat(timespec="seconds")
 
+def now_sf_hm() -> str:
+    return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).strftime("%Y-%m-%d %H:%M")
 
 def load_events_safe(path: str = "data/events.csv") -> pd.DataFrame:
     try:
@@ -195,7 +193,6 @@ def load_events_safe(path: str = "data/events.csv") -> pd.DataFrame:
     except Exception:
         pass
     return pd.DataFrame()
-
 
 def recent_events(df: pd.DataFrame, lookback_h: int, category: Optional[str]) -> pd.DataFrame:
     if df is None or df.empty:
@@ -215,7 +212,6 @@ def recent_events(df: pd.DataFrame, lookback_h: int, category: Optional[str]) ->
     out["weight"] = 1.0
     return out
 
-
 def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: int = 80) -> pd.DataFrame:
     if agg is None or agg.empty:
         return pd.DataFrame(columns=["latitude", "longitude", "weight"])
@@ -233,6 +229,20 @@ def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: in
     except Exception:
         return pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
+def render_top_badge(model_version: str, last_train: str, last_update_iso: Optional[str], daily_time_label: str = "19:00"):
+    """
+    Üst bilgi satırı:
+    Model • Son eğitim • Günlük güncellenir • Son güncelleme (SF) • Şu an (SF)
+    """
+    parts = [
+        "**SUTAM**",
+        f"• Model:  {model_version}",
+        f"• Son eğitim:  {last_train}",
+        f"• Günlük güncellenir: ~{daily_time_label} (SF)",
+        f"•  Son güncelleme (SF): {last_update_iso if last_update_iso else '—'}",
+        f"•  Şu an (SF): {now_sf_hm()}",
+    ]
+    st.markdown(" ".join(parts))
 
 def run_prediction(
     start_h: int,
@@ -343,7 +353,6 @@ def run_prediction(
 
     return agg, agg_long, start_iso, horizon_h
 
-
 def top_risky_table(
     df_agg: pd.DataFrame, n: int, show_ci: bool, start_iso: Optional[str], horizon_h: int
 ) -> pd.DataFrame:
@@ -379,7 +388,6 @@ def top_risky_table(
     drop = ["expected"] + (["nr_boost"] if "nr_boost" in df.columns else [])
     return df.drop(columns=drop)
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # UI: Sayfa & Başlık
 # ─────────────────────────────────────────────────────────────────────────────
@@ -388,26 +396,30 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-# Veri sonu
+# Suç verisinden SON GÜNCELLEME (SF) bilgisini oku
 try:
     crime_paths = [
-        "data/sf_crime.csv",
-        "data/sf_crime_52.csv",
-        "data/sf_crime_50.csv",
+        "data/sf_crime.csv",     # ham/işlenmiş ana veri
+        "data/sf_crime_52.csv",  # grid + Y_label özet
+        "data/sf_crime_50.csv",  # özet/temiz
     ]
-    data_upto_val = load_latest_crime_ts(crime_paths)
+    last_update_iso_sf = load_latest_crime_ts(crime_paths)
 
+    # events yine ayrı state'te dursun (hotspot/near-repeat için)
     _events_df = load_events_safe()
     st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
     st.session_state["events"] = st.session_state["events_df"]
 except Exception:
     st.session_state["events_df"] = None
     st.session_state["events"] = None
-    data_upto_val = None
-show_last_update_badge(
-    data_upto=(data_upto_val.split("T")[0] if data_upto_val else None),
+    last_update_iso_sf = None
+
+# ÜST BİLGİ SATIRI (İSTENEN BİÇİM)
+render_top_badge(
     model_version=MODEL_VERSION,
     last_train=MODEL_LAST_TRAIN,
+    last_update_iso=last_update_iso_sf,  # ISO-ss
+    daily_time_label="19:00",
 )
 
 # Geo katmanı
@@ -717,7 +729,7 @@ if sekme == "Operasyon":
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
-            
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SEKME: Raporlar
 # ─────────────────────────────────────────────────────────────────────────────
