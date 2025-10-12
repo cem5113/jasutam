@@ -2,24 +2,25 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 import folium
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
-import glob
-import os, io, glob
 from zipfile import ZipFile, BadZipFile
 from streamlit_folium import st_folium
 
-# Yerel paket yolları
+# ─────────────────────────────────────────────────────────────────────────────
+# Proje kökü ve import yolu
+# ─────────────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# ─────────────────────────────────────────────────────────────────────────────
 # Yerel modüller
+# ─────────────────────────────────────────────────────────────────────────────
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
 from utils.patrol import allocate_patrols
@@ -31,8 +32,7 @@ from utils.ui import (
     render_day_hour_heatmap as fallback_heatmap,
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from services.metrics import compute_kpis
-# NOT: components.last_update.show_last_update_badge kullanılmıyor
+from services.metrics import compute_kpis  # noqa: F401 (şimdilik kullanılmıyor)
 
 # Opsiyonel modüller
 try:
@@ -113,6 +113,7 @@ def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
         out[want] = out[want].astype(str)
     return out
 
+
 def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Centroid kolon adlarını standardize eder (centroid_lat/lon)."""
     if df is None or df.empty:
@@ -135,8 +136,10 @@ def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
             rn["lon"] = "centroid_lon"
     return out.rename(columns=rn) if rn else out
 
+
 def now_sf_iso() -> str:
     return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).isoformat(timespec="seconds")
+
 
 def load_events_safe(path: str = "data/events.csv") -> pd.DataFrame:
     try:
@@ -146,6 +149,7 @@ def load_events_safe(path: str = "data/events.csv") -> pd.DataFrame:
     except Exception:
         pass
     return pd.DataFrame()
+
 
 def recent_events(df: pd.DataFrame, lookback_h: int, category: Optional[str]) -> pd.DataFrame:
     if df is None or df.empty:
@@ -165,6 +169,7 @@ def recent_events(df: pd.DataFrame, lookback_h: int, category: Optional[str]) ->
     out["weight"] = 1.0
     return out
 
+
 def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: int = 80) -> pd.DataFrame:
     if agg is None or agg.empty:
         return pd.DataFrame(columns=["latitude", "longitude", "weight"])
@@ -182,6 +187,7 @@ def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: in
     except Exception:
         return pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
+
 def render_top_badge(model_version: str, last_train: str, last_update_iso: str, daily_time_label: str = "19:00"):
     """
     Üst bilgi satırı (tek satır):
@@ -195,6 +201,7 @@ def render_top_badge(model_version: str, last_train: str, last_update_iso: str, 
         f"• Son güncelleme (SF): {last_update_iso}",
     ]
     st.markdown(" ".join(parts))
+
 
 def run_prediction(
     start_h: int,
@@ -304,6 +311,7 @@ def run_prediction(
 
     return agg, agg_long, start_iso, horizon_h
 
+
 def top_risky_table(
     df_agg: pd.DataFrame, n: int, show_ci: bool, start_iso: Optional[str], horizon_h: int
 ) -> pd.DataFrame:
@@ -396,13 +404,14 @@ hotspot_cat = st.sidebar.selectbox(
 use_hot_hours = st.sidebar.checkbox("Geçici hotspot için gün içi saat filtresi", value=False)
 hot_hours_rng = st.sidebar.slider("Saat aralığı (hotspot)", 0, 24, (0, 24), disabled=not use_hot_hours)
 
-# Zaman ufku (gerçek zamanlı gösterim)
-current_time = datetime.now().strftime('%H:%M')
-current_date = datetime.now().strftime('%Y-%m-%d')
+# Zaman ufku etiketi (SF saatine göre)
+_now_local = (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET))
+current_time = _now_local.strftime('%H:%M')
+current_date = _now_local.strftime('%Y-%m-%d')
 ufuk_label = f"Zaman Aralığı (from {current_time}, today, {current_date})"
 
 ufuk = st.sidebar.radio(ufuk_label, ["24s", "48s", "7g"], index=0, horizontal=True)
-max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7*24, 24)
+max_h, step = (24, 1) if ufuk == "24s" else (48, 3) if ufuk == "48s" else (7 * 24, 24)
 start_h, end_h = st.sidebar.slider("Saat filtresi", min_value=0, max_value=max_h, value=(0, max_h), step=step)
 
 # Kategori filtresi (tahmin motoru)
@@ -560,8 +569,10 @@ if sekme == "Operasyon":
                         show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
                         show_risk_layer=True,
-                        map_style=("mapbox://styles/mapbox/dark-v11" if st.session_state.get("dark_mode")
-                                   else "mapbox://styles/mapbox/light-v11"),
+                        map_style=(
+                            "mapbox://styles/mapbox/dark-v11" if st.session_state.get("dark_mode")
+                            else "mapbox://styles/mapbox/light-v11"
+                        ),
                         initial_view={"lat": 37.7749, "lon": -122.4194, "zoom": 11.8},
                     )
                     st.pydeck_chart(deck)
