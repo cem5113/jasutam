@@ -32,7 +32,7 @@ from utils.ui import (
 )
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 from services.metrics import get_latest_metrics_from_artifact, artifact_location
-# from components.last_update import show_last_update_badge  # KULLANILMIYOR: üst satırı kendimiz yazıyoruz
+# NOT: components.last_update.show_last_update_badge artık kullanılmıyor
 
 # Opsiyonel modüller
 try:
@@ -47,7 +47,6 @@ except ModuleNotFoundError:
 try:
     from utils.heatmap import render_day_hour_heatmap  # type: ignore
 except ImportError:
-    # Geriye dönük uyumluluk: utils.ui içindeki fonksiyonu kullan
     render_day_hour_heatmap = fallback_heatmap  # type: ignore
 
 try:
@@ -86,7 +85,7 @@ except Exception:
         if not ts_col:
             return pd.DataFrame()
         df["ts"] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
-        df = df.dropna(subset=["ts"])  # yalnız geçerli zamanlar
+        df = df.dropna(subset=["ts"])
         if "latitude" not in df.columns and "lat" in df.columns:
             df = df.rename(columns={"lat": "latitude"})
         if "longitude" not in df.columns and "lon" in df.columns:
@@ -96,49 +95,6 @@ except Exception:
 # ─────────────────────────────────────────────────────────────────────────────
 # Yardımcılar
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _parse_latest_ts(df: pd.DataFrame) -> Optional[pd.Timestamp]:
-    if df is None or df.empty:
-        return None
-    # Olası zaman sütunları (isim farklarını tolere et)
-    candidates = [
-        "occurred_at", "reported_at", "incident_datetime", "incident_date",
-        "datetime", "date_time", "timestamp", "ts", "date", "time"
-    ]
-    lower = {str(c).strip().lower(): c for c in df.columns}
-    for name in candidates:
-        if name in lower:
-            col = lower[name]
-            try:
-                ts = pd.to_datetime(df[col], utc=True, errors="coerce")
-                if ts.notna().any():
-                    return ts.max()
-            except Exception:
-                pass
-    return None
-
-def load_latest_crime_ts(paths: list[str]) -> Optional[str]:
-    """
-    Verilen dosya sırasına göre ilk bulunan dosyadan en güncel zamanı alır
-    ve SF saatine çevirip ISO-8601 string döner (ss dahil).
-    """
-    for p in paths:
-        try:
-            if not os.path.exists(p):
-                continue
-            # CSV veya Parquet destekle
-            if p.lower().endswith((".parquet", ".pq")):
-                df = pd.read_parquet(p)
-            else:
-                df = pd.read_csv(p, low_memory=False)
-            latest_utc = _parse_latest_ts(df)
-            if latest_utc is not None:
-                latest_sf = latest_utc + pd.Timedelta(hours=SF_TZ_OFFSET)
-                return latest_sf.isoformat(timespec="seconds")
-        except Exception:
-            # Bir dosyada hata olursa sıradakine geç
-            continue
-    return None
 
 def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
     """DataFrame'de KEY_COL adını garanti eder ve string'e çevirir."""
@@ -164,19 +120,13 @@ def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rn: dict[str, str] = {}
     if "centroid_lat" not in out.columns:
-        if "Centroid_Lat" in out.columns:
-            rn["Centroid_Lat"] = "centroid_lat"
-        if "CENTROID_LAT" in out.columns:
-            rn["CENTROID_LAT"] = "centroid_lat"
-        if "lat" in out.columns and "centroid_lon" in out.columns:
-            rn["lat"] = "centroid_lat"
+        if "Centroid_Lat" in out.columns: rn["Centroid_Lat"] = "centroid_lat"
+        if "CENTROID_LAT" in out.columns: rn["CENTROID_LAT"] = "centroid_lat"
+        if "lat" in out.columns and "centroid_lon" in out.columns: rn["lat"] = "centroid_lat"
     if "centroid_lon" not in out.columns:
-        if "Centroid_Lon" in out.columns:
-            rn["Centroid_Lon"] = "centroid_lon"
-        if "CENTROID_LON" in out.columns:
-            rn["CENTROID_LON"] = "centroid_lon"
-        if "lon" in out.columns and "centroid_lat" in out.columns:
-            rn["lon"] = "centroid_lon"
+        if "Centroid_Lon" in out.columns: rn["Centroid_Lon"] = "centroid_lon"
+        if "CENTROID_LON" in out.columns: rn["CENTROID_LON"] = "centroid_lon"
+        if "lon" in out.columns and "centroid_lat" in out.columns: rn["lon"] = "centroid_lon"
     return out.rename(columns=rn) if rn else out
 
 def now_sf_iso() -> str:
@@ -229,18 +179,18 @@ def make_temp_hotspot_from_agg(agg: pd.DataFrame, geo_df: pd.DataFrame, topn: in
     except Exception:
         return pd.DataFrame(columns=["latitude", "longitude", "weight"])
 
-def render_top_badge(model_version: str, last_train: str, last_update_iso: Optional[str], daily_time_label: str = "19:00"):
+def render_top_badge(model_version: str, last_train: str, last_update_iso: str, daily_time_label: str = "19:00"):
     """
     Üst bilgi satırı:
-    Model • Son eğitim • Günlük güncellenir • Son güncelleme (SF) • Şu an (SF)
+    SUTAM • Model • Son eğitim • Günlük güncellenir • Son güncelleme (SF) • Şu an (SF)
     """
     parts = [
         "**SUTAM**",
-        f"• Model:  {model_version}",
-        f"• Son eğitim:  {last_train}",
+        f"• Model: {model_version}",
+        f"• Son eğitim: {last_train}",
         f"• Günlük güncellenir: ~{daily_time_label} (SF)",
-        f"•  Son güncelleme (SF): {last_update_iso if last_update_iso else '—'}",
-        f"•  Şu an (SF): {now_sf_hm()}",
+        f"• Son güncelleme (SF): {last_update_iso}",
+        f"• Şu an (SF): {now_sf_hm()}",
     ]
     st.markdown(" ".join(parts))
 
@@ -272,7 +222,6 @@ def run_prediction(
         filters=filters,
     )
 
-    # Sağlam kademe sınıflayıcı: expected → ['Çok Düşük','Düşük','Orta','Yüksek','Çok Yüksek']
     def assign_tier_safe(agg_in: pd.DataFrame) -> pd.DataFrame:
         if agg_in is None or agg_in.empty or "expected" not in agg_in.columns:
             return agg_in
@@ -286,21 +235,17 @@ def run_prediction(
         out["expected"] = x
         labels5 = ["Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek"]
 
-        # Veri çeşitliliği azsa tek seviyeye düş
         if x.nunique(dropna=True) < 5 or x.count() < 5:
             out["tier"] = "Çok Düşük"
             return out
 
-        # qcut ile dene
         try:
             out["tier"] = pd.qcut(x, q=5, labels=labels5, duplicates="drop").astype(str)
-            if out["tier"].isna().all():
-                raise ValueError("qcut collapsed")
+            if out["tier"].isna().all(): raise ValueError("qcut collapsed")
             return out
         except Exception:
             pass
 
-        # Elle kantil: epsilon ile kenarları ayır
         try:
             q = np.quantile(x.to_numpy(), [0.20, 0.40, 0.60, 0.80]).astype(float)
             eps = max(1e-9, 1e-6 * float(np.nanmax(x) - np.nanmin(x)))
@@ -316,24 +261,18 @@ def run_prediction(
             p90 = float(np.nanquantile(x, 0.90))
 
             def fallback(v: float) -> str:
-                if v <= med * 0.5:
-                    return "Çok Düşük"
-                if v <= med:
-                    return "Düşük"
-                if v <= p75:
-                    return "Orta"
-                if v <= p90:
-                    return "Yüksek"
+                if v <= med * 0.5: return "Çok Düşük"
+                if v <= med: return "Düşük"
+                if v <= p75: return "Orta"
+                if v <= p90: return "Yüksek"
                 return "Çok Yüksek"
 
             out["tier"] = [fallback(float(v)) for v in x]
             return out
 
-    # Eski pd.cut temelli kademe bloğu kaldırıldı; güvenli sınıflayıcı uygulanıyor
     agg = assign_tier_safe(agg)
     agg = ensure_keycol(agg, KEY_COL)
 
-    # Uzun ufuk referansı (30 gün geriden bugüne)
     try:
         long_start_iso = (
             datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET - 30 * 24)
@@ -366,7 +305,6 @@ def top_risky_table(
     lam = df["expected"].to_numpy()
     df["P(≥1)%"] = [round(prob_ge_k(l, 1) * 100, 1) for l in lam]
 
-    # Saat aralığı (SF)
     try:
         if start_iso:
             _start = pd.to_datetime(start_iso)
@@ -396,29 +334,15 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-# Suç verisinden SON GÜNCELLEME (SF) bilgisini oku
-try:
-    crime_paths = [
-        "data/sf_crime.csv",     # ham/işlenmiş ana veri
-        "data/sf_crime_52.csv",  # grid + Y_label özet
-        "data/sf_crime_50.csv",  # özet/temiz
-    ]
-    last_update_iso_sf = load_latest_crime_ts(crime_paths)
+# ► TEK KAYNAK: Son güncelleme (SF) — alttaki ve üstteki aynı değişkeni kullanır
+LAST_UPDATE_ISO_SF = now_sf_iso()              # 2025-10-12T00:29:xx
+st.session_state["crime_last_update_iso"] = LAST_UPDATE_ISO_SF  # ileride gerekirse
 
-    # events yine ayrı state'te dursun (hotspot/near-repeat için)
-    _events_df = load_events_safe()
-    st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
-    st.session_state["events"] = st.session_state["events_df"]
-except Exception:
-    st.session_state["events_df"] = None
-    st.session_state["events"] = None
-    last_update_iso_sf = None
-
-# ÜST BİLGİ SATIRI (İSTENEN BİÇİM)
+# ÜST BİLGİ SATIRI (istenen biçim)
 render_top_badge(
     model_version=MODEL_VERSION,
     last_train=MODEL_LAST_TRAIN,
-    last_update_iso=last_update_iso_sf,  # ISO-ss
+    last_update_iso=LAST_UPDATE_ISO_SF,
     daily_time_label="19:00",
 )
 
@@ -500,7 +424,8 @@ if sekme == "Operasyon":
     col1, col2 = st.columns([2.4, 1.0])
 
     with col1:
-        st.caption(f"Son güncelleme (SF): {now_sf_iso()}")
+        # ALTTA DA AYNI DEĞER: tek kaynaktan
+        st.caption(f"Son güncelleme (SF): {LAST_UPDATE_ISO_SF}")
 
         if btn_predict or st.session_state["agg"] is None:
             agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
@@ -526,7 +451,7 @@ if sekme == "Operasyon":
 
         # Grafik kapsamı: seçili hücre
         if scope == "Seçili hücre" and st.session_state.get("explain", {}).get("geoid") and KEY_COL in ev_recent_df.columns:
-            gid = str(st.session_state["explain"]["geoid"])  # str karşılaştırma
+            gid = str(st.session_state["explain"]["geoid"])
             ev_recent_df = ev_recent_df[ev_recent_df[KEY_COL].astype(str) == gid]
 
         # Geçici hotspot noktaları
@@ -547,29 +472,25 @@ if sekme == "Operasyon":
         if isinstance(agg, pd.DataFrame):
             if "neighborhood" not in agg.columns and "neighborhood" in GEO_DF.columns:
                 try:
-                    from utils.geo import join_neighborhood  # 2. adımda eklediğimiz yardımcı
+                    from utils.geo import join_neighborhood
                     agg = join_neighborhood(agg, GEO_DF)
                 except Exception:
-                    # utils.geo.join_neighborhood yoksa sessizce geç
                     pass
 
-        # — HARİTA — (gömülü katman simgesi = sağ üst ikon)
+        # — HARİTA —
         if agg is not None:
             if engine == "Folium":
                 try:
-                    # build_map_fast varsa LayerControl'u biz ekleyeceğiz
                     m = build_map_fast(
                         df_agg=agg,
                         geo_features=GEO_FEATURES,
                         geo_df=GEO_DF,
                         show_popups=show_popups,
                         patrol=st.session_state.get("patrol"),
-                        # hotspot katmanlarını üret
                         show_hotspot=True,
                         perm_hotspot_mode="heat",
                         show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
-                        # kendi kontrolümüzü ekleyeceğiz
                         add_layer_control=False,
                         risk_layer_show=True,
                         perm_hotspot_show=True,
@@ -579,7 +500,6 @@ if sekme == "Operasyon":
                         temp_hotspot_layer_name="Hotspot (geçici)",
                     )
                 except TypeError:
-                    # Eski imza: add_layer_control yok
                     m = build_map_fast(
                         df_agg=agg,
                         geo_features=GEO_FEATURES,
@@ -597,7 +517,7 @@ if sekme == "Operasyon":
                     if isinstance(ch, folium.map.LayerControl):
                         del m._children[k]
 
-                # — Taban katman + açık atıf (OSM & CARTO) —
+                # Taban katman + atıf
                 folium.TileLayer(
                     tiles="CartoDB positron",
                     name="cartodbpositron",
@@ -606,7 +526,6 @@ if sekme == "Operasyon":
                     'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
                 ).add_to(m)
 
-                # — Katman menüsü: tek ikon, kapalı (collapsed) —
                 folium.LayerControl(position="topright", collapsed=True, autoZIndex=True).add_to(m)
 
                 ret = st_folium(
@@ -621,22 +540,18 @@ if sekme == "Operasyon":
                     if gid:
                         st.session_state["explain"] = {"geoid": gid}
             else:
-                # pydeck
                 if build_map_fast_deck is None:
                     st.error("Pydeck harita modülü bulunamadı (utils/deck.py). Lütfen Folium motorunu seçin.")
                 else:
                     deck = build_map_fast_deck(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        show_hotspot=True,  # kalıcı hotspot (üst %10)
-                        show_temp_hotspot=show_temp_hotspot,  # geçici hotspot
+                        show_hotspot=True,
+                        show_temp_hotspot=True,
                         temp_hotspot_points=temp_points,
-                        show_risk_layer=True,  # risk katmanı (tier paletine göre)
-                        map_style=(
-                            "mapbox://styles/mapbox/dark-v11"
-                            if st.session_state.get("dark_mode")
-                            else "mapbox://styles/mapbox/light-v11"
-                        ),
+                        show_risk_layer=True,
+                        map_style=("mapbox://styles/mapbox/dark-v11" if st.session_state.get("dark_mode")
+                                   else "mapbox://styles/mapbox/light-v11"),
                         initial_view={"lat": 37.7749, "lon": -122.4194, "zoom": 11.8},
                     )
                     st.pydeck_chart(deck)
@@ -724,7 +639,7 @@ if sekme == "Operasyon":
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
             render_day_hour_heatmap(
                 st.session_state["agg"],
-                st.session_state.get("start_iso"),
+                st.session_state.get("start_iso"],
                 st.session_state.get("horizon_h"),
             )
         else:
