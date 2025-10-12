@@ -343,29 +343,6 @@ st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
-# Veri sonu
-try:
-    _events_df = load_events_safe()
-    st.session_state["events_df"] = _events_df if isinstance(_events_df, pd.DataFrame) else None
-    st.session_state["events"] = st.session_state["events_df"]
-    data_upto_val = (
-        pd.to_datetime(_events_df["ts"]).max().date().isoformat()
-        if isinstance(_events_df, pd.DataFrame)
-        and not _events_df.empty
-        and "ts" in _events_df.columns
-        else None
-    )
-except Exception:
-    st.session_state["events_df"] = None
-    st.session_state["events"] = None
-    data_upto_val = None
-
-show_last_update_badge(
-    data_upto=data_upto_val,
-    model_version=MODEL_VERSION,
-    last_train=MODEL_LAST_TRAIN,
-)
-
 # Geo katmanı
 GEO_DF, GEO_FEATURES = load_geoid_layer("data/sf_cells.geojson")
 GEO_DF = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
