@@ -27,7 +27,14 @@ from utils.ui import (
     render_result_card,
     build_map_fast,
     render_kpi_row,
+    render_day_hour_heatmap as _fallback_heatmap,
 )
+
+# utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
+try:
+    from utils.heatmap import render_day_hour_heatmap  # type: ignore
+except Exception:
+    render_day_hour_heatmap = _fallback_heatmap
 
 # reports (optional)
 try:
@@ -253,40 +260,6 @@ def top_risky_table(
     drop = ["expected"] + (["nr_boost"] if "nr_boost" in df.columns else [])
     return df.drop(columns=drop)
 
-# ── NEW: city day×hour fast allocator (diurnal × weekly)
-def city_day_hour_matrix_fast(total_expected: float, start_iso: str, horizon_h: int, events_df: pd.DataFrame | None) -> pd.DataFrame:
-    """Toplam bekleneni (start, horizon) içindeki gerçek saatlere diurnal×weekly ile dağıt."""
-    start = pd.to_datetime(start_iso).replace(minute=0, second=0, microsecond=0)
-    # diurnal profile (24)
-    h = np.arange(24)
-    diurnal = 1.0 + 0.4 * np.sin(((h - 18) / 24.0) * 2.0 * np.pi)
-    diurnal = diurnal / diurnal.sum()
-    # weekly weights from events (UTC→SF)
-    if isinstance(events_df, pd.DataFrame) and not events_df.empty and "ts" in events_df.columns:
-        tmp = events_df[["ts"]].copy()
-        tmp["ts"] = pd.to_datetime(tmp["ts"], utc=True, errors="coerce")
-        tmp = tmp.dropna()
-        tmp["ts_sf"] = tmp["ts"] + pd.Timedelta(hours=SF_TZ_OFFSET)
-        dow_count = tmp["ts_sf"].dt.dayofweek.value_counts().reindex(range(7), fill_value=0).astype(float)
-        if dow_count.sum() > 0:
-            weekly = (dow_count / dow_count.sum()).to_numpy()
-        else:
-            weekly = np.ones(7) / 7.0
-    else:
-        # default: weekend +10%, Monday -5%
-        base = np.array([0.95, 1.0, 1.0, 1.0, 1.0, 1.10, 1.10], dtype=float)
-        weekly = base / base.sum()
-    # build horizon hours (SF local clock)
-    hours = [start + pd.to_timedelta(i, unit="h") + pd.Timedelta(hours=SF_TZ_OFFSET) for i in range(int(horizon_h))]
-    # combined weights for each actual hour
-    w = np.array([diurnal[t.hour] * weekly[t.weekday()] for t in hours], dtype=float)
-    w = w / (w.sum() + 1e-12)
-    # allocate to matrix
-    mat = pd.DataFrame(0.0, index=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], columns=[f"{i:02d}" for i in range(24)])
-    for t, ww in zip(hours, w):
-        mat.loc[mat.index[t.weekday()], f"{t.hour:02d}"] += float(total_expected) * float(ww)
-    return mat
-
 # ─────────────────────────── UI ───────────────────────────
 
 st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
@@ -327,7 +300,7 @@ with st.sidebar.expander("🔎 Veri Tanı / Health Check", expanded=False):
 
 with st.sidebar:
     if HAS_REPORTS:
-        sekme = st.radio("Sekbe", ["Operasyon", "Raporlar"], index=0, horizontal=True, label_visibility="collapsed")
+        sekme = st.radio("Sekme", ["Operasyon", "Raporlar"], index=0, horizontal=True, label_visibility="collapsed")
     else:
         sekme = "Operasyon"
 
@@ -575,14 +548,11 @@ if sekme == "Operasyon":
                 mat.index = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
                 mat.columns = [f"{h:02d}" for h in mat.columns]
             else:
-                # YENİ hızlı mod: diurnal × weekly ile gerçek saatlere dağıt
-                total_expected = float(pd.to_numeric(st.session_state["agg"]["expected"], errors="coerce")
-                                       .replace([np.inf,-np.inf],np.nan).fillna(0).clip(lower=0).sum())
-                mat = city_day_hour_matrix_fast(total_expected, st.session_state["start_iso"], H, load_events_safe())
-
-            st.dataframe(mat.round(2), use_container_width=True)
-            arr = mat.to_numpy(); i, j = np.unravel_index(np.argmax(arr), arr.shape)
-            st.caption(f"Toplam beklenen: {mat.values.sum():.2f} • En yoğun: {mat.index[i]} {mat.columns[j]}")
+                render_day_hour_heatmap(
+                    st.session_state["agg"],
+                    st.session_state["start_iso"],
+                    H,
+                )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
 
