@@ -262,7 +262,7 @@ def top_risky_table(
 
 # ─────────────────────────── UI ───────────────────────────
 
-st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
+st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli YEni Versiyon", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
