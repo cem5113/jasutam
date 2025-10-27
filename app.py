@@ -522,10 +522,6 @@ if sekme == "Operasyon":
                 agg=st.session_state["agg"],
                 start_iso=st.session_state["start_iso"],
                 horizon_h=H,
-                geo_df=GEO_DF,
-                base_int=BASE_INT,
-                filters=filters,
-                events_df=events_all,
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
