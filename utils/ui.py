@@ -40,6 +40,8 @@ __all__ = [
 ]
 
 # ────────────────────────────── KÜÇÜK VE TUTARLI TİPOGRAFİ + LEAFLET DÜZELTMESİ ──────────────────────────────
+render_day_hour_heatmap = _fallback_heatmap
+
 SMALL_UI_CSS = """
 <style>
 /* === GENEL: tüm yazılar küçük, satır aralığı dar === */
@@ -638,7 +640,12 @@ def build_map_fast(
     return m
 
 # ───────────── Gün × Saat Isı Matrisi (Fallback/Quick) ─────────────
-def render_day_hour_heatmap(agg: pd.DataFrame, start_iso: str | None = None, horizon_h: int | None = None):
+def render_day_hour_heatmap(
+    agg: pd.DataFrame,
+    start_iso: str | None = None,
+    horizon_h: int | None = None,
+    **_  # fazla argümanlar sessizce yok sayılır
+):
     """
     Hızlı 7×24 ısı matrisi:
     - Şehir toplam 'expected' değerini, seçilen ufukta (dow,hour) ağırlıklarına dağıtır.
