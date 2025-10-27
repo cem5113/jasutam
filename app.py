@@ -75,6 +75,77 @@ except Exception:
         return df
 
 # ───────────────────────────────── helpers ─────────────────────────────────
+def _to_float(x, default=None):
+    try: return float(x)
+    except Exception: return default
+
+def _norm_point(pt):
+    # (lat,lon) | (lon,lat) | dict | [..] -> (lat,lon)
+    if pt is None: return None
+    if isinstance(pt, dict):
+        lat = _to_float(pt.get("lat", pt.get("latitude")))
+        lon = _to_float(pt.get("lon", pt.get("longitude")))
+        return (lat, lon) if lat is not None and lon is not None else None
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        a, b = _to_float(pt[0]), _to_float(pt[1])
+        if a is None or b is None: return None
+        # Heuristik: |lon| > 100 ise (lon,lat) gelmiştir → çevir
+        return (b, a) if abs(a) > 100 and abs(b) < 100 else (a, b)
+    return None
+
+def _route_from_cells(zone, geo_df):
+    cells = zone.get("cells") or zone.get("planned_cells") or []
+    if not cells: return []
+    df = geo_df.copy()
+    df[KEY_COL] = df[KEY_COL].astype(str)
+    sel = df[df[KEY_COL].isin([str(c) for c in cells])]
+    if sel.empty or not {"centroid_lat","centroid_lon"}.issubset(sel.columns): return []
+    if "expected" in sel.columns:
+        sel = sel.sort_values("expected", ascending=False)
+    return list(zip(sel["centroid_lat"].astype(float), sel["centroid_lon"].astype(float)))
+
+def _centroid_for_zone(zone, route):
+    c = zone.get("centroid")
+    if isinstance(c, dict) and {"lat","lon"} <= set(c.keys()):
+        lat, lon = _to_float(c["lat"]), _to_float(c["lon"])
+        if lat is not None and lon is not None:
+            return {"lat": lat, "lon": lon}
+    if route:
+        i = len(route)//2
+        return {"lat": float(route[i][0]), "lon": float(route[i][1])}
+    return None
+
+def _normalize_patrol(patrol, geo_df, agg_df):
+    """utils.patrol.allocate_patrols çıktısını folium çizimine uygun hale getirir."""
+    if not patrol or not isinstance(patrol, dict):
+        return {"zones": []}
+    zones = patrol.get("zones") or patrol.get("Zones") or patrol.get("data") or []
+    out = []
+    for z in zones:
+        zid = z.get("id") or z.get("zone") or f"Z{len(out)+1}"
+        # route normalizasyonu
+        raw_route = z.get("route") or []
+        route = []
+        for pt in raw_route:
+            p = _norm_point(pt)
+            if p: route.append(p)
+        if not route:
+            # cell listesi varsa centroidlerden rota türet
+            route = _route_from_cells(z, geo_df)
+        cen = _centroid_for_zone(z, route)
+        out.append({
+            "id": str(zid),
+            "route": route,  # [(lat,lon), ...] olabilir ya da boş olabilir
+            "centroid": cen or {"lat": 37.7749, "lon": -122.4194},
+            "cells": z.get("cells") or z.get("planned_cells") or [],
+            "expected_risk": float(z.get("expected_risk", 0.0)),
+            "eta_minutes": int(z.get("eta_minutes", 0)),
+            "utilization_pct": float(z.get("utilization_pct", 0.0)),
+            "planned_cells": z.get("planned_cells", []),
+            "capacity_cells": z.get("capacity_cells", 0),
+        })
+    return {"zones": out}
+
 
 def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
     if df is None or df.empty:
