@@ -631,9 +631,8 @@ if sekme == "Operasyon":
                         st.session_state["explain"] = {"geoid": str(row.geoid)}
                         st.experimental_rerun()
             st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
-
+            
         st.subheader("Devriye özeti")
-        patrol = st.session_state.get("patrol")st.subheader("Devriye özeti")
         patrol = st.session_state.get("patrol")
         if patrol and patrol.get("zones"):
             rows = [{
