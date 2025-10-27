@@ -40,8 +40,6 @@ __all__ = [
 ]
 
 # ────────────────────────────── KÜÇÜK VE TUTARLI TİPOGRAFİ + LEAFLET DÜZELTMESİ ──────────────────────────────
-render_day_hour_heatmap = _fallback_heatmap
-
 SMALL_UI_CSS = """
 <style>
 /* === GENEL: tüm yazılar küçük, satır aralığı dar === */
