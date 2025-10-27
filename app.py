@@ -341,11 +341,51 @@ LAST_UPDATE_ISO_SF = now_sf_iso()
 render_top_badge(MODEL_VERSION, MODEL_LAST_TRAIN, LAST_UPDATE_ISO_SF, daily_time_label="19:00")
 
 # GEO
-GEO_DF, GEO_FEATURES = load_geoid_layer("data/sf_cells.geojson")
-GEO_DF = ensure_keycol(ensure_centroid_cols(GEO_DF), KEY_COL)
-if GEO_DF.empty:
-    st.error("GEOJSON yüklenemedi veya satır yok.")
+# ── GEO (revize)
+import pandas as pd
+import streamlit as st
+
+@st.cache_data(show_spinner=False)
+def _load_geo_cached(path: str):
+    df, feats = load_geoid_layer(path)
+    # Kolon isimlerini güvenceye al
+    df = ensure_keycol(ensure_centroid_cols(df), KEY_COL)
+
+    if df is None or df.empty:
+        raise RuntimeError("GEO katmanı boş döndü.")
+
+    # GEOID zorunlu: stringe çevir + trim
+    df[KEY_COL] = df[KEY_COL].astype(str).str.strip()
+    df = df.dropna(subset=[KEY_COL])
+
+    # centroid kolonlarını güvenli sayıya çevir
+    for c in ("centroid_lat", "centroid_lon"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Kaç satırda centroid eksik?
+    miss_centroid = (
+        int(df[["centroid_lat", "centroid_lon"]].isna().any(axis=1).sum())
+        if {"centroid_lat", "centroid_lon"}.issubset(df.columns) else None
+    )
+
+    return df, feats, miss_centroid
+
+try:
+    GEO_DF, GEO_FEATURES, _MISS_CENTROID = _load_geo_cached("data/sf_cells.geojson")
+except Exception as e:
+    st.error(f"GEOJSON yüklenemedi: {e}")
     st.stop()
+
+if GEO_DF.empty:
+    st.error("GEOJSON yüklendi fakat satır bulunamadı.")
+    st.stop()
+
+# Centroid kolonları yoksa uyar; varsa çok eksikse bilgi ver
+if not {"centroid_lat", "centroid_lon"}.issubset(GEO_DF.columns):
+    st.warning("Uyarı: 'centroid_lat' / 'centroid_lon' kolonları yok. Rota/hotspot merkezleri çizilemeyebilir.")
+elif _MISS_CENTROID and _MISS_CENTROID > 0:
+    st.info(f"Bilgi: {int(_MISS_CENTROID)} hücrede centroid eksik. Bu hücreler rota/işaretleme sırasında atlanabilir.")
 
 # base intensity
 BASE_INT = precompute_base_intensity(GEO_DF)
@@ -434,6 +474,27 @@ if sekme == "Operasyon":
                                      "events": st.session_state.get("events_df")})
 
         agg = st.session_state["agg"]
+        # >>> YENİ: Devriye planını hesapla ve state'e yaz
+        if btn_patrol:
+            if isinstance(agg, pd.DataFrame) and not agg.empty:
+                try:
+                    plan = allocate_patrols(
+                        df_agg=agg,
+                        geo_df=GEO_DF,
+                        k=int(K_planned),
+                        duty_minutes=int(duty_minutes),
+                        cell_minutes=int(cell_minutes),
+                        start_iso=st.session_state.get("start_iso"),
+                        horizon_h=int(st.session_state.get("horizon_h") or 24),
+                    )
+                    st.session_state["patrol"] = _normalize_patrol(plan, GEO_DF, agg)
+                    st.experimental_rerun()  # rotayı hemen çizmek için yeniden çalıştır
+                except Exception as e:
+                    st.error(f"Devriye planı oluşturulamadı: {e}")
+            else:
+                st.warning("Önce ‘Tahmin et’ ile risk haritasını üretin.")
+
+        
         events_all = st.session_state.get("events")
         lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
         ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
@@ -572,8 +633,7 @@ if sekme == "Operasyon":
             st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
 
         st.subheader("Devriye özeti")
-        if isinstance(a, pd.DataFrame) and not a.empty and st.session_state.get("agg") is not None and st.session_state.get("patrol") is None:
-            pass  # kullanıcı düğmeye basınca hesaplanıyor
+        patrol = st.session_state.get("patrol")st.subheader("Devriye özeti")
         patrol = st.session_state.get("patrol")
         if patrol and patrol.get("zones"):
             rows = [{
