@@ -621,19 +621,111 @@ def build_map_fast(
         pass
 
     # Devriye rotaları
+    def _to_float(x, default=None):
+        try:
+            return float(x)
+        except Exception:
+            return default
+
+    def _norm_point(pt):
+        """
+        pt: (lat, lon) | (lon, lat) | [..] | {"lat":..,"lon":..} | {"latitude":..,"longitude":..}
+        Folium için (lat, lon) döndürür. SF heuristiği: |lon| ~ 122, lat ~ 37-38
+        """
+        if pt is None:
+            return None
+        # dict ise
+        if isinstance(pt, dict):
+            lat = pt.get("lat", pt.get("latitude"))
+            lon = pt.get("lon", pt.get("longitude"))
+            lat = _to_float(lat); lon = _to_float(lon)
+            if lat is None or lon is None:
+                return None
+            return (lat, lon)
+
+        # dizi/tuple ise
+        if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+            a = _to_float(pt[0]); b = _to_float(pt[1])
+            if a is None or b is None:
+                return None
+            # Heuristik: birinci mutlak > 100 ise o lon’dur; (lon,lat) geldi → çevir
+            if abs(a) > 100 and abs(b) < 100:
+                return (b, a)  # (lat, lon)
+            # Normal (lat,lon) gibi görünüyorsa direkt dön
+            return (a, b)
+        return None
+
+    def _centroid_from_zone(z):
+        """z['centroid'] varsa kullan, yoksa rota noktalarından ortalama ile üret."""
+        c = z.get("centroid")
+        if isinstance(c, dict) and {"lat", "lon"} <= set(c.keys()):
+            lat = _to_float(c.get("lat")); lon = _to_float(c.get("lon"))
+            if lat is not None and lon is not None:
+                return (lat, lon)
+        # rota üzerinden ortalama
+        pts = []
+        for pt in (z.get("route") or []):
+            p = _norm_point(pt)
+            if p: pts.append(p)
+        if pts:
+            lat = float(np.mean([p[0] for p in pts])); lon = float(np.mean([p[1] for p in pts]))
+            return (lat, lon)
+        return None
+
+    def _build_route_from_cells(z, geo_df):
+        """route yoksa cells→centroid’lerden basit rota üret (E[olay] varsa ağırlıklı sırala)."""
+        cells = z.get("cells") or z.get("planned_cells") or []
+        if not cells or geo_df is None or geo_df.empty:
+            return []
+        df = geo_df.copy()
+        df[KEY_COL] = df[KEY_COL].astype(str)
+        sel = df[df[KEY_COL].isin([str(c) for c in cells])]
+        if sel.empty or not {"centroid_lat", "centroid_lon"}.issubset(sel.columns):
+            return []
+        # varsa expected’a göre sırala, yoksa olduğu gibi
+        if "expected" in sel.columns:
+            sel = sel.sort_values("expected", ascending=False)
+        pts = list(zip(sel["centroid_lat"].astype(float), sel["centroid_lon"].astype(float)))
+        return pts
+
     if patrol and patrol.get("zones"):
+        drew_any = False
         for z in patrol["zones"]:
             try:
-                folium.PolyLine(z["route"], tooltip=f"{z['id']} rota").add_to(m)
-                folium.Marker(
-                    [z["centroid"]["lat"], z["centroid"]["lon"]],
-                    icon=folium.DivIcon(
-                        html="<div style='background:#111;color:#fff;padding:2px 6px;border-radius:6px'>"
-                             f" {z['id']} </div>"
-                    ),
-                ).add_to(m)
-            except Exception:
+                # 1) Route’u normalize et / üret
+                raw_route = z.get("route") or []
+                route = []
+                for pt in raw_route:
+                    p = _norm_point(pt)
+                    if p: route.append(p)
+                if not route:
+                    route = _build_route_from_cells(z, geo_df)
+
+                # 2) PolyLine çiz
+                if route and len(route) >= 2:
+                    folium.PolyLine(route, tooltip=f"{z.get('id','Z')} rota").add_to(m)
+                    drew_any = True
+
+                # 3) Centroid belirle & etiketle
+                cen = _centroid_from_zone(z)
+                if cen is None and route:
+                    cen = route[len(route)//2]  # rota ortası
+                if cen is not None:
+                    folium.Marker(
+                        [cen[0], cen[1]],
+                        icon=folium.DivIcon(
+                            html="<div style='background:#111;color:#fff;padding:2px 6px;border-radius:6px'>"
+                                 f" {z.get('id','Z')} </div>"
+                        ),
+                    ).add_to(m)
+                    drew_any = True
+            except Exception as e:
+                # sessiz geç
                 continue
+
+        if not drew_any:
+            st.warning("Devriye rotası oluşturulamadı: 'route' veya 'cells' bilgisi eksik/uyumsuz.")
+
 
     return m
 
