@@ -468,11 +468,11 @@ if sekme == "Operasyon":
         if isinstance(a, pd.DataFrame) and not a.empty:
             kpi_expected = round(float(a["expected"].sum()), 2)
             cnts = {
-                "Çok Yüksek": int((a.get("tier", pd.Series(dtype=str)) == "Çok Yüksek").sum()),
-                "Yüksek":     int((a.get("tier", pd.Series(dtype=str)) == "Yüksek").sum()),
-                "Orta":       int((a.get("tier", pd.Series(dtype=str)) == "Orta").sum()),
-                "Düşük":      int((a.get("tier", pd.Series(dtype[str])) == "Düşük").sum()),
-                "Çok Düşük":  int((a.get("tier", pd.Series(dtype[str])) == "Çok Düşük").sum()),
+                "Çok Yüksek": int((a.get("tier", pd.Series([], dtype="string")) == "Çok Yüksek").sum()),
+                "Yüksek":     int((a.get("tier", pd.Series([], dtype="string")) == "Yüksek").sum()),
+                "Orta":       int((a.get("tier", pd.Series([], dtype="string")) == "Orta").sum()),
+                "Düşük":      int((a.get("tier", pd.Series([], dtype="string")) == "Düşük").sum()),
+                "Çok Düşük":  int((a.get("tier", pd.Series([], dtype="string")) == "Çok Düşük").sum()),
             }
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
