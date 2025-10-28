@@ -10,6 +10,10 @@ import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
+import inspect
+from utils.patrol import allocate_patrols as _ap
+st.write("allocate_patrols signature:", inspect.signature(_ap))
+
 # ── constants
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
 
@@ -19,9 +23,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # ── local modules
+# ── local modules
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
-from utils.patrol import allocate_patrols
+from utils.patrol import allocate_patrols         # ← BU SATIR VAR
 from utils.ui import (
     SMALL_UI_CSS,
     render_result_card,
@@ -30,6 +35,28 @@ from utils.ui import (
     render_day_hour_heatmap as _fallback_heatmap,
 )
 
+# >>> BURADAN SONRA EKLE
+import inspect
+try:
+    from utils.patrol import allocate_patrols as _allocate_patrols
+except Exception:
+    _allocate_patrols = None
+
+def allocate_patrols(*args, **kwargs):
+    if _allocate_patrols is None:
+        raise RuntimeError("utils.patrol.allocate_patrols import edilemedi.")
+    params = set(inspect.signature(_allocate_patrols).parameters.keys())
+
+    # K ailesini gerçek ada eşle
+    for alias in ["K", "k", "n", "num_units", "n_units", "units", "num_zones", "count"]:
+        if alias in kwargs:
+            # hedef ad: imzada hangisi varsa onu kullan
+            target = next((p for p in ["k","n","num_units","units"] if p in params), None)
+            if target and target != alias:
+                kwargs[target] = kwargs.pop(alias)
+            break
+    return _allocate_patrols(*args, **kwargs)
+    
 # utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
 try:
     from utils.heatmap import render_day_hour_heatmap  # type: ignore
