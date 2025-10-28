@@ -481,7 +481,7 @@ if sekme == "Operasyon":
                     plan = allocate_patrols(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        K=int(K_planned),                  # ← büyük K
+                        k=int(K_planned),                  # ← büyük K
                         duty_minutes=int(duty_minutes),
                         cell_minutes=int(cell_minutes),
                         start_iso=st.session_state.get("start_iso"),
