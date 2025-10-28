@@ -85,6 +85,12 @@ except Exception:
         return df
 
 # ───────────────────────────────── helpers ─────────────────────────────────
+def ss_get(key, default=None):
+    try:
+        return st.session_state[key]
+    except KeyError:
+        return default
+        
 def _to_float(x, default=None):
     try: return float(x)
     except Exception: return default
@@ -233,7 +239,7 @@ def render_top_badge(model_version: str, last_train: str, last_update_iso: str, 
         f"• Model: {model_version}",
         f"• Son eğitim: {last_train}",
         f"• Günlük güncellenir: ~{daily_time_label} (SF)",
-        f"• Son güncelleme (SF): {last_update_iso}%",
+        f"• Son güncelleme (SF): {last_update_iso}",
     ]
     st.markdown(" ".join(parts).replace("%%", "%"))
 
@@ -610,34 +616,40 @@ if sekme == "Operasyon":
             st.info("Önce ‘🔮 Tahmin et’ ile bir tahmin üretin.")
 
         st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points) if isinstance(temp_points, pd.DataFrame) else 0}")
-
+        
         # === Alternatif Plan Seçimi / Kaydetme ===
-        plans = st.session_state.get("patrol_plans") or []
+        plans = ss_get("patrol_plans", []) or []
         if plans:
-            mode_txt = st.session_state.get("patrol", {}).get("meta", {}).get("mode", "Öneri")
+            # Güvenli mode adı oku
+            _patrol_obj = ss_get("patrol", {})
+            if not isinstance(_patrol_obj, dict):
+                _patrol_obj = {}
+            _meta = _patrol_obj.get("meta") or {}
+            mode_txt = _meta.get("mode", "Öneri")
+        
             idxs = [f"{mode_txt} – Plan {i+1}" for i in range(len(plans))]
             choice_lbl = st.radio(
                 "Önerilen plan seç:",
                 idxs,
-                index=max(0, min(len(plans), st.session_state.get("patrol_choice",1)) - 1),
+                index=max(0, min(len(plans), ss_get("patrol_choice", 1)) - 1),
                 horizontal=True,
                 key=f"plan_choice_radio_{len(plans)}"
             )
             choice = int(choice_lbl.split()[-1])  # 'Plan N'
             st.session_state["patrol_choice"] = choice
-
+        
             # Haritada seçili planı göster
-            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
-
+            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, ss_get("agg"))
+        
             c1, c2 = st.columns(2)
             if c1.button("Bu planı uygula", key="apply_plan_btn"):
-                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, ss_get("agg"))
                 st.rerun()
-
+        
             if c2.button("Bu planı kaydet"):
                 meta = {
-                    "start_iso": st.session_state.get("start_iso"),
-                    "horizon_h": int(st.session_state.get("horizon_h") or 24),
+                    "start_iso": ss_get("start_iso"),
+                    "horizon_h": int(ss_get("horizon_h") or 24),
                     "k_planned": int(K_planned),
                     "duty_minutes": int(duty_minutes),
                     "cell_minutes": int(cell_minutes),
@@ -704,8 +716,8 @@ if sekme == "Operasyon":
             st.caption("Tablo, bir tahmin üretildiğinde gösterilir.")
 
         st.subheader("Devriye özeti")
-        patrol = st.session_state.get("patrol")
-        if patrol and patrol.get("zones"):
+        patrol = st.session_state["patrol"] if "patrol" in st.session_state else None
+        if isinstance(patrol, dict) and patrol.get("zones"):
             rows = []
             for z in patrol["zones"]:
                 rows.append({
