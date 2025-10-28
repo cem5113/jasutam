@@ -456,8 +456,6 @@ with st.sidebar:
     btn_predict = colA.button("Tahmin et")
     btn_patrol  = colB.button("Devriye öner")
 
-st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
-
 # ── state
 st.session_state.setdefault("agg", None)
 st.session_state.setdefault("agg_long", None)
@@ -606,6 +604,8 @@ if sekme == "Operasyon":
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
+        st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
+        
         # === YENİ: Alternatif Plan Seçimi / Kaydetme ===
         plans = st.session_state.get("patrol_plans") or []
         if plans:
