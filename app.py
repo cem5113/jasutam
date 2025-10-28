@@ -496,6 +496,36 @@ if sekme == "Operasyon":
         if btn_priority or btn_balanced:
             if isinstance(agg, pd.DataFrame) and not agg.empty:
                 try:
+                    # ────────────────────────────────
+                    # 🔹 Yol süresi sağlayıcısı seçimi
+                    # ────────────────────────────────
+                    from utils.travel import build_travel_time_fn
+        
+                    st.markdown("#### 🚗 Rota sağlayıcısı seçimi")
+                    provider = st.radio(
+                        "Rota hesaplama motoru",
+                        ["google", "osrm"],
+                        index=0,
+                        horizontal=True,
+                        help="Google: gerçek rota & trafik verisi (ücretli) • OSRM: ücretsiz, tahmini hız profili",
+                    )
+        
+                    geo2 = GEO_DF.copy()
+                    geo2["centroid_lat"] = pd.to_numeric(geo2["centroid_lat"], errors="coerce")
+                    geo2["centroid_lon"] = pd.to_numeric(geo2["centroid_lon"], errors="coerce")
+                    coords = list(zip(geo2["centroid_lat"], geo2["centroid_lon"]))
+        
+                    with st.spinner(f"‘{provider.upper()}’ rota sağlayıcısından mesafe/süre hesaplanıyor..."):
+                        try:
+                            travel_fn = build_travel_time_fn(coords, provider=provider)
+                            st.success(f"{provider.upper()} rota fonksiyonu başarıyla hazırlandı ✅")
+                        except Exception as e:
+                            st.warning(f"Rota sağlayıcısı hata verdi ({provider}): {e}")
+                            travel_fn = None
+        
+                    # ────────────────────────────────
+                    # 🔹 Devriye planlarını oluştur
+                    # ────────────────────────────────
                     if btn_priority:
                         plans = make_priority_plans(
                             base_df=agg,
@@ -503,7 +533,8 @@ if sekme == "Operasyon":
                             k_planned=3,
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
-                            n_plans=3
+                            n_plans=3,
+                            travel_time_fn=travel_fn,  # 🧭 gerçek yol süresi fonksiyonu
                         )
                         mode_label = "Risk Öncelikli"
                     else:
@@ -513,26 +544,35 @@ if sekme == "Operasyon":
                             k_planned=int(K_planned),
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
-                            n_plans=6
+                            n_plans=6,
+                            travel_time_fn=travel_fn,  # 🧭 gerçek yol süresi fonksiyonu
                         )
                         mode_label = "Kotalı Dengeli"
-
+        
+                    # ────────────────────────────────
+                    # 🔹 State güncelle
+                    # ────────────────────────────────
                     st.session_state["patrol_plans"] = plans
                     st.session_state["patrol_choice"] = 1
                     chosen = plans[0] if plans else {}
-
+        
                     st.session_state["patrol"] = _normalize_patrol(chosen, GEO_DF, agg)
                     st.session_state.setdefault("patrol", {}).setdefault("meta", {})
                     st.session_state["patrol"]["meta"].update({
                         "start_iso": st.session_state.get("start_iso"),
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
                         "mode": mode_label,
+                        "provider": provider,
                     })
+        
+                    st.success(f"✅ {mode_label} devriye planı üretildi ({provider.upper()} tabanlı)")
                     st.rerun()
+        
                 except Exception as e:
                     st.error(f"Devriye planı oluşturulamadı: {e}")
             else:
                 st.warning("Önce ‘🔮 Tahmin et’ ile risk haritasını üretin.")
+
 
         # === HARİTA ===
         if agg is not None:
