@@ -520,68 +520,6 @@ if sekme == "Operasyon":
             else:
                 st.warning("Önce ‘Tahmin et’ ile risk haritasını üretin.")
 
-        # === Alternatif plan seçimi / kaydetme ===
-        plans = st.session_state.get("patrol_plans") or []
-        if plans:
-            idxs = [f"Plan {i+1}" for i in range(len(plans))]
-            choice_lbl = st.radio(
-                "Önerilen plan seç:",
-                idxs,
-                index=max(0, min(len(plans), st.session_state.get("patrol_choice", 1)) - 1),
-                horizontal=True
-            )
-            choice = int(choice_lbl.split()[-1])  # 1..N
-            st.session_state["patrol_choice"] = choice
-        
-            # Seçili planı haritada göster
-            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
-        
-            c1, c2 = st.columns(2)
-            if c1.button("Bu planı uygula"):
-                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
-                st.rerun()
-        
-            if c2.button("Bu planı kaydet"):
-                meta = {
-                    "start_iso": st.session_state.get("start_iso"),
-                    "horizon_h": int(st.session_state.get("horizon_h") or 24),
-                    "k_planned": int(K_planned),
-                    "duty_minutes": int(duty_minutes),
-                    "cell_minutes": int(cell_minutes),
-                    "model_version": MODEL_VERSION,
-                }
-                try:
-                    save_selected_plan(plans, idx=choice-1, meta=meta, path="data/patrol_logs.json")
-                    st.success("Kaydedildi. Sonraki önerilerde kapsama/yorgunluk etkisi dikkate alınacak.")
-                except Exception as e:
-                    st.error(f"Kaydedilemedi: {e}")
-                    
-        events_all = st.session_state.get("events")
-        lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
-        ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
-                                     lookback_h, hotspot_cat)
-
-        if scope == "Seçili hücre" and st.session_state.get("explain", {}).get("geoid") and KEY_COL in ev_recent_df.columns:
-            gid = str(st.session_state["explain"]["geoid"])
-            ev_recent_df = ev_recent_df[ev_recent_df[KEY_COL].astype(str) == gid]
-
-        temp_points = ev_recent_df[["latitude", "longitude", "weight"]] if not ev_recent_df.empty \
-                      else pd.DataFrame(columns=["latitude", "longitude", "weight"])
-        if use_hot_hours and not temp_points.empty and "ts" in ev_recent_df.columns:
-            h1, h2 = hot_hours_rng[0], (hot_hours_rng[1] - 1) % 24
-            temp_points = ev_recent_df[ev_recent_df["ts"].dt.hour.between(h1, h2)][["latitude", "longitude", "weight"]]
-        if temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
-            temp_points = make_temp_hotspot_from_agg(agg, GEO_DF, topn=80)
-        st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
-
-        if isinstance(agg, pd.DataFrame):
-            if "neighborhood" not in agg.columns and "neighborhood" in GEO_DF.columns:
-                try:
-                    from utils.geo import join_neighborhood
-                    agg = join_neighborhood(agg, GEO_DF)
-                except Exception:
-                    pass
-
         # === HARİTA ===
         if agg is not None:
             if engine == "Folium":
@@ -650,9 +588,13 @@ if sekme == "Operasyon":
         plans = st.session_state.get("patrol_plans") or []
         if plans:
             idxs = [f"Plan {i+1}" for i in range(len(plans))]
-            choice_lbl = st.radio("Önerilen plan seç:", idxs,
-                                  index=max(0, min(len(plans), st.session_state.get("patrol_choice",1)) - 1),
-                                  horizontal=True)
+            choice_lbl = st.radio(
+                "Önerilen plan seç:",
+                idxs,
+                index=max(0, min(len(plans), st.session_state.get("patrol_choice",1)) - 1),
+                horizontal=True,
+                key=f"plan_choice_radio_{len(plans)}"
+            )
             choice = int(choice_lbl.split()[-1])  # 1..N
             st.session_state["patrol_choice"] = choice
 
@@ -660,7 +602,7 @@ if sekme == "Operasyon":
             st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
 
             c1, c2 = st.columns(2)
-            if c1.button("Bu planı uygula"):
+            if c1.button("Bu planı uygula", key="apply_plan_btn"):
                 st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
                 st.rerun()
 
@@ -674,7 +616,7 @@ if sekme == "Operasyon":
                     "model_version": MODEL_VERSION,
                 }
                 try:
-                    save_plan(plans[choice-1], meta, path="data/patrol_logs.json")
+                    save_selected_plan(plans, idx=choice-1, meta=meta, path="data/patrol_logs.json")
                     st.success("Kaydedildi. Sonraki önerilerde kapsama/yorgunluk etkisi dikkate alınacak.")
                 except Exception as e:
                     st.error(f"Kaydedilemedi: {e}")
