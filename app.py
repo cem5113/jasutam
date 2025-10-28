@@ -34,7 +34,7 @@ from utils.ui import (
 
 # 🔗 YENİ: Çoklu devriye planı üretme / kaydetme yardımcıları
 # (utils/patrol_planner.py içinde olmalı: propose_patrol_plans, save_plan)
-from utils.patrol_planner import propose_patrol_plans, save_plan
+from utils.patrol_planner import propose_patrol_plans, save_selected_plan
 
 # utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
 try:
@@ -491,9 +491,9 @@ if sekme == "Operasyon":
                             k_planned=int(K_planned),
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
-                            allocate_fn=allocate_patrols,     # mevcut fonksiyon
+                            allocate_fn=allocate_patrols,
                             n_plans=5,
-                            logs_path="data/patrol_logs.json", # geçmişe göre çeşitlilik
+                            logs_path="data/patrol_logs.json",
                             fatigue_hours=24,
                             fatigue_alpha=0.25,
                         )
@@ -508,9 +508,8 @@ if sekme == "Operasyon":
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
                         )
-
+        
                     st.session_state["patrol"] = _normalize_patrol(chosen, GEO_DF, agg)
-                    # Meta bilgileri ekle
                     st.session_state["patrol"]["meta"] = {
                         "start_iso": st.session_state.get("start_iso"),
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
@@ -521,6 +520,42 @@ if sekme == "Operasyon":
             else:
                 st.warning("Önce ‘Tahmin et’ ile risk haritasını üretin.")
 
+        # === Alternatif plan seçimi / kaydetme ===
+        plans = st.session_state.get("patrol_plans") or []
+        if plans:
+            idxs = [f"Plan {i+1}" for i in range(len(plans))]
+            choice_lbl = st.radio(
+                "Önerilen plan seç:",
+                idxs,
+                index=max(0, min(len(plans), st.session_state.get("patrol_choice", 1)) - 1),
+                horizontal=True
+            )
+            choice = int(choice_lbl.split()[-1])  # 1..N
+            st.session_state["patrol_choice"] = choice
+        
+            # Seçili planı haritada göster
+            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+        
+            c1, c2 = st.columns(2)
+            if c1.button("Bu planı uygula"):
+                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+                st.rerun()
+        
+            if c2.button("Bu planı kaydet"):
+                meta = {
+                    "start_iso": st.session_state.get("start_iso"),
+                    "horizon_h": int(st.session_state.get("horizon_h") or 24),
+                    "k_planned": int(K_planned),
+                    "duty_minutes": int(duty_minutes),
+                    "cell_minutes": int(cell_minutes),
+                    "model_version": MODEL_VERSION,
+                }
+                try:
+                    save_selected_plan(plans, idx=choice-1, meta=meta, path="data/patrol_logs.json")
+                    st.success("Kaydedildi. Sonraki önerilerde kapsama/yorgunluk etkisi dikkate alınacak.")
+                except Exception as e:
+                    st.error(f"Kaydedilemedi: {e}")
+                    
         events_all = st.session_state.get("events")
         lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
         ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
