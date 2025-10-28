@@ -1,3 +1,5 @@
+# app.py — SUTAM: Suç Tahmin Modeli (tam revize)
+
 from __future__ import annotations
 
 import os, sys
@@ -29,6 +31,10 @@ from utils.ui import (
     render_kpi_row,
     render_day_hour_heatmap as _fallback_heatmap,
 )
+
+# 🔗 YENİ: Çoklu devriye planı üretme / kaydetme yardımcıları
+# (utils/patrol_planner.py içinde olmalı: propose_patrol_plans, save_plan)
+from utils.patrol_planner import propose_patrol_plans, save_plan
 
 # utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
 try:
@@ -145,7 +151,6 @@ def _normalize_patrol(patrol, geo_df, agg_df):
             "capacity_cells": z.get("capacity_cells", 0),
         })
     return {"zones": out}
-
 
 def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
     if df is None or df.empty:
@@ -333,18 +338,14 @@ def top_risky_table(
 
 # ─────────────────────────── UI ───────────────────────────
 
-st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli YEni Versiyon", layout="wide")
+st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli Yeni Versiyon", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
 LAST_UPDATE_ISO_SF = now_sf_iso()
 render_top_badge(MODEL_VERSION, MODEL_LAST_TRAIN, LAST_UPDATE_ISO_SF, daily_time_label="19:00")
 
-# GEO
 # ── GEO (revize)
-import pandas as pd
-import streamlit as st
-
 @st.cache_data(show_spinner=False)
 def _load_geo_cached(path: str):
     df, feats = load_geoid_layer(path)
@@ -444,23 +445,27 @@ with st.sidebar:
     filters = {"cats": CATEGORIES if sel_categories and "(Hepsi)" in sel_categories else (sel_categories or None)}
 
     st.markdown("### Devriye Planı")
-    K_planned = st.number_input("Planlanan devriye sayısı (K)", 1, 50, 6, 1)
+    K_planned    = st.number_input("Planlanan devriye sayısı (K)", 1, 50, 6, 1)
     duty_minutes = st.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
     cell_minutes = st.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
+    multi_mode   = st.checkbox("5 alternatif plan üret", value=True)  # ← YENİ
 
     run_hourly_heatmap = False
-    
+
     colA, colB = st.columns(2)
     btn_predict = colA.button("Tahmin et")
     btn_patrol  = colB.button("Devriye öner")
 
-# state
+# ── state
 st.session_state.setdefault("agg", None)
 st.session_state.setdefault("agg_long", None)
 st.session_state.setdefault("patrol", None)
 st.session_state.setdefault("start_iso", None)
 st.session_state.setdefault("horizon_h", None)
 st.session_state.setdefault("explain", {})
+# YENİ: çoklu plan listesi ve seçim indeksi
+st.session_state.setdefault("patrol_plans", None)   # list[dict] (ham planlar)
+st.session_state.setdefault("patrol_choice", 1)     # 1..N
 
 # ── main
 if sekme == "Operasyon":
@@ -474,32 +479,48 @@ if sekme == "Operasyon":
                                      "events": st.session_state.get("events_df")})
 
         agg = st.session_state["agg"]
+
+        # YENİ: Devriye öner
         if btn_patrol:
             if isinstance(agg, pd.DataFrame) and not agg.empty:
                 try:
-                    plan = allocate_patrols(
-                        df_agg=agg,
-                        geo_df=GEO_DF,
-                        k_planned=int(K_planned),      # ← 'K' değil 'k_planned'
-                        duty_minutes=int(duty_minutes),
-                        cell_minutes=int(cell_minutes),
-                        # travel_overhead parametresi gerekiyorsa burada ekleyebilirsin:
-                        # travel_overhead=0.4,
-                    )
-                    st.session_state["patrol"] = _normalize_patrol(plan, GEO_DF, agg)
-        
-                    # İstersen meta ekleyebilirsin (allocate_patrols imzasını bozmadan):
+                    if multi_mode:
+                        plans = propose_patrol_plans(
+                            base_df=agg,
+                            geo_df=GEO_DF,
+                            k_planned=int(K_planned),
+                            duty_minutes=int(duty_minutes),
+                            cell_minutes=int(cell_minutes),
+                            allocate_fn=allocate_patrols,     # mevcut fonksiyon
+                            n_plans=5,
+                            logs_path="data/patrol_logs.json", # geçmişe göre çeşitlilik
+                            fatigue_hours=24,
+                            fatigue_alpha=0.25,
+                        )
+                        st.session_state["patrol_plans"] = plans
+                        st.session_state["patrol_choice"] = 1
+                        chosen = plans[0]
+                    else:
+                        chosen = allocate_patrols(
+                            df_agg=agg,
+                            geo_df=GEO_DF,
+                            k_planned=int(K_planned),
+                            duty_minutes=int(duty_minutes),
+                            cell_minutes=int(cell_minutes),
+                        )
+
+                    st.session_state["patrol"] = _normalize_patrol(chosen, GEO_DF, agg)
+                    # Meta bilgileri ekle
                     st.session_state["patrol"]["meta"] = {
                         "start_iso": st.session_state.get("start_iso"),
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
                     }
-        
-                    st.rerun() # rotayı hemen çizmek için
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Devriye planı oluşturulamadı: {e}")
             else:
                 st.warning("Önce ‘Tahmin et’ ile risk haritasını üretin.")
-        
+
         events_all = st.session_state.get("events")
         lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
         ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
@@ -526,7 +547,7 @@ if sekme == "Operasyon":
                 except Exception:
                     pass
 
-        # map
+        # === HARİTA ===
         if agg is not None:
             if engine == "Folium":
                 try:
@@ -590,7 +611,40 @@ if sekme == "Operasyon":
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
-        # result card
+        # === YENİ: Alternatif Plan Seçimi / Kaydetme ===
+        plans = st.session_state.get("patrol_plans") or []
+        if plans:
+            idxs = [f"Plan {i+1}" for i in range(len(plans))]
+            choice_lbl = st.radio("Önerilen plan seç:", idxs,
+                                  index=max(0, min(len(plans), st.session_state.get("patrol_choice",1)) - 1),
+                                  horizontal=True)
+            choice = int(choice_lbl.split()[-1])  # 1..N
+            st.session_state["patrol_choice"] = choice
+
+            # Haritada seçilen planı göster
+            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+
+            c1, c2 = st.columns(2)
+            if c1.button("Bu planı uygula"):
+                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+                st.rerun()
+
+            if c2.button("Bu planı kaydet"):
+                meta = {
+                    "start_iso": st.session_state.get("start_iso"),
+                    "horizon_h": int(st.session_state.get("horizon_h") or 24),
+                    "k_planned": int(K_planned),
+                    "duty_minutes": int(duty_minutes),
+                    "cell_minutes": int(cell_minutes),
+                    "model_version": MODEL_VERSION,
+                }
+                try:
+                    save_plan(plans[choice-1], meta, path="data/patrol_logs.json")
+                    st.success("Kaydedildi. Sonraki önerilerde kapsama/yorgunluk etkisi dikkate alınacak.")
+                except Exception as e:
+                    st.error(f"Kaydedilemedi: {e}")
+
+        # === Sonuç Kartı
         start_iso = st.session_state.get("start_iso")
         horizon_h = st.session_state.get("horizon_h")
         info = st.session_state.get("explain")
@@ -634,9 +688,9 @@ if sekme == "Operasyon":
                 with cols[i]:
                     if st.button(str(row.geoid)):
                         st.session_state["explain"] = {"geoid": str(row.geoid)}
-                        st.experimental_rerun()
+                        st.rerun()  # YENİ: experimental_rerun → rerun
             st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
-            
+
         st.subheader("Devriye özeti")
         patrol = st.session_state.get("patrol")
         if patrol and patrol.get("zones"):
@@ -650,9 +704,6 @@ if sekme == "Operasyon":
         st.subheader("Gün × Saat Isı Matrisi")
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
             H = int(st.session_state.get("horizon_h") or 24)
-            events_all = st.session_state.get("events")
-        
-            # utils/heatmap varsa gerçek saatlik; yoksa ui.py fallback'i zaten import logic ile devreye girer
             render_day_hour_heatmap(
                 agg=st.session_state["agg"],
                 start_iso=st.session_state["start_iso"],
