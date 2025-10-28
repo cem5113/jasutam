@@ -494,7 +494,7 @@ if sekme == "Operasyon":
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
                     }
         
-                    st.experimental_rerun()  # rotayı hemen çizmek için
+                    st.rerun() # rotayı hemen çizmek için
                 except Exception as e:
                     st.error(f"Devriye planı oluşturulamadı: {e}")
             else:
