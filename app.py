@@ -1,31 +1,14 @@
 from __future__ import annotations
+
 import os, sys
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-import streamlit as st
-st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli Yeni Versiyon", layout="wide")  # ← ilk Streamlit çağrısı
-
 import folium
 import numpy as np
 import pandas as pd
+import streamlit as st
 from streamlit_folium import st_folium
-
-# ── constants / local imports vs.
-from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
-from utils.geo import load_geoid_layer, resolve_clicked_gid
-from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
-from utils.patrol import allocate_patrols
-# (buraya esnek sarmalayıcıyı ekle)
-
-import inspect
-from utils.patrol import allocate_patrols as _ap
-
-# güvenli imza yazdırma (log/debug)
-try:
-    st.write("allocate_patrols signature:", str(inspect.signature(_ap)))
-except Exception as e:
-    st.write("allocate_patrols signature okunamadı:", str(e))
 
 # ── constants
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
@@ -36,10 +19,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # ── local modules
-# ── local modules
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
-from utils.patrol import allocate_patrols         # ← BU SATIR VAR
+from utils.patrol import allocate_patrols
 from utils.ui import (
     SMALL_UI_CSS,
     render_result_card,
@@ -48,32 +30,6 @@ from utils.ui import (
     render_day_hour_heatmap as _fallback_heatmap,
 )
 
-import inspect
-try:
-    from utils.patrol import allocate_patrols as _allocate_patrols
-except Exception:
-    _allocate_patrols = None
-
-from utils.patrol import allocate_patrols as __allocate_patrols
-def allocate_patrols(*args, **kwargs):
-    if "k_planned" not in kwargs:
-        for alias in ["K", "k", "n", "num_units", "n_units", "units", "num_zones", "count"]:
-            if alias in kwargs:
-                kwargs["k_planned"] = kwargs.pop(alias)
-                break
-    return __allocate_patrols(*args, **kwargs)
-
-    # K/k/… → k_planned’e eşle
-    for alias in ["K", "k", "n", "num_units", "n_units", "units", "num_zones", "count"]:
-        if alias in kwargs:
-            if "k_planned" not in kwargs:
-                kwargs["k_planned"] = kwargs.pop(alias)
-            else:
-                kwargs.pop(alias, None)
-            break
-
-    return _allocate_patrols(*args, **kwargs)
-    
 # utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
 try:
     from utils.heatmap import render_day_hour_heatmap  # type: ignore
@@ -525,11 +481,12 @@ if sekme == "Operasyon":
                     plan = allocate_patrols(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        k_planned=int(K_planned),     # ← doğru argüman adı
+                        K=int(K_planned),                  # ← büyük K
                         duty_minutes=int(duty_minutes),
                         cell_minutes=int(cell_minutes),
-                        # travel_overhead=0.4  # varsa opsiyonel
-                    )     
+                        start_iso=st.session_state.get("start_iso"),
+                        horizon_h=int(st.session_state.get("horizon_h") or 24),
+                    )
                     st.session_state["patrol"] = _normalize_patrol(plan, GEO_DF, agg)
                     st.experimental_rerun()  # rotayı hemen çizmek için yeniden çalıştır
                 except Exception as e:
