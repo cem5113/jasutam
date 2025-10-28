@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Optional, Dict, List
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -17,8 +17,8 @@ try:
 except Exception:
     KEY_COL = "GEOID"
 
-# %50 / %30 / %10 / %10 – "Çok Düşük" bilinçli 0
-DEFAULT_DIST = {
+# Varsayılan tier dağılımı (toplam 1.0): 30/25/20/15/10
+DEFAULT_DIST: Dict[str, float] = {
     "Çok Yüksek": 0.30,
     "Yüksek":     0.25,
     "Orta":       0.20,
@@ -110,7 +110,7 @@ def assign_tier_safe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ───────────────────────────── geçmiş kayıt / yorgunluk ─────────────────────────────
-def load_saved_plans(path: str = "data/patrol_logs.json") -> list[dict]:
+def load_saved_plans(path: str = "data/patrol_logs.json") -> List[dict]:
     p = Path(path)
     if not p.exists():
         return []
@@ -132,7 +132,7 @@ def save_plan(plan: dict, meta: dict | None = None, path: str = "data/patrol_log
     p.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def recent_patrolled_geoids(logs: list[dict], lookback_hours: int = 24) -> set[str]:
+def recent_patrolled_geoids(logs: List[dict], lookback_hours: int = 24) -> set[str]:
     cutoff = int(time.time()) - int(lookback_hours) * 3600
     gids: set[str] = set()
     for item in logs:
@@ -141,7 +141,8 @@ def recent_patrolled_geoids(logs: list[dict], lookback_hours: int = 24) -> set[s
                 continue
             zones = (item.get("plan") or {}).get("zones", [])
             for z in zones:
-                for g in z.get("planned_cells", []) or z.get("cells", []):
+                # Sadece 'cells' liste; 'planned_cells' int'tir.
+                for g in z.get("cells", []):
                     gids.add(str(g))
         except Exception:
             continue
@@ -173,7 +174,7 @@ def apply_fatigue_penalty(
 # ───────────────────────────── ağırlıklandırma ve çeşitlilik ─────────────────────────────
 def make_weighted_view(
     df: pd.DataFrame,
-    dist: dict[str, float] = DEFAULT_DIST,
+    dist: Dict[str, float] = DEFAULT_DIST,
     jitter: float = 0.05,
 ) -> pd.DataFrame:
     """
@@ -216,6 +217,29 @@ def diversify_against(
     return out
 
 
+# ────────────── planlardan üst hücreleri toplayan yardımcı (çeşitlilik için) ──────────────
+def _collect_top_geoids_from_plan(
+    plan: dict,
+    key_col: str = KEY_COL,
+    fallback_df: Optional[pd.DataFrame] = None,
+    top_n: int = 60
+) -> set[str]:
+    try:
+        cells: List[str] = []
+        for z in (plan or {}).get("zones", []):
+            cells.extend(z.get("cells", []))  # DİKKAT: planned_cells int, liste değil
+        if cells:
+            return set(map(str, cells))
+        if fallback_df is not None and len(fallback_df) > 0:
+            return set(
+                fallback_df.sort_values("expected", ascending=False)
+                           .head(int(top_n))[key_col].astype(str).tolist()
+            )
+    except Exception:
+        pass
+    return set()
+
+
 # ───────────────────────────── ana API ─────────────────────────────
 def propose_patrol_plans(
     base_df: pd.DataFrame,
@@ -227,7 +251,7 @@ def propose_patrol_plans(
     *,
     key_col: str = KEY_COL,
     n_plans: int = 5,
-    dist: dict[str, float] = DEFAULT_DIST,
+    dist: Dict[str, float] = DEFAULT_DIST,
     logs_path: str = "data/patrol_logs.json",
     fatigue_hours: int = 24,
     fatigue_alpha: float = 0.25,
@@ -236,19 +260,16 @@ def propose_patrol_plans(
     diversify_gamma: float = 0.35,
     travel_overhead: float | None = None,
     seed: int | None = None,
-) -> list[dict]:
+) -> List[dict]:
     """
     Çoklu devriye önerileri üretir (varsayılan 5 adet).
 
     Adımlar:
       1) Geçmiş devriyelerden (son `fatigue_hours`) gelen hücrelere ceza uygula.
-      2) 50/30/10/10 tier dağılımına göre ağırlıklandır; jitter ile çeşitlilik ver.
-      3) (opsiyonel) Önceki planlardaki en üst N hücreye çeşitlilik cezası uygula.
+      2) Tier dağılımına göre ağırlıklandır; jitter ile çeşitlilik ver.
+      3) (opsiyonel) Önceki planlardaki top-N hücrelere çeşitlilik cezası uygula.
       4) allocate_fn ile planı üret, meta bilgisi ekle.
-
-    Dönüş: [plan_dict, ...]  (allocate_fn çıktıları + meta)
     """
-    # RNG sabitleme (test edilebilirlik)
     if seed is not None:
         np.random.seed(int(seed))
 
@@ -259,7 +280,7 @@ def propose_patrol_plans(
     logs = load_saved_plans(logs_path)
     penalized = recent_patrolled_geoids(logs, lookback_hours=fatigue_hours)
 
-    plans: list[dict] = []
+    plans: List[dict] = []
     already_top: set[str] = set()
 
     for i in range(int(n_plans)):
@@ -290,7 +311,7 @@ def propose_patrol_plans(
 
         plan = allocate_fn(**kwargs)
 
-        # 5) Meta / defansif alanları ekle
+        # 5) Meta + çeşitlilik güncellemesi
         if isinstance(plan, dict):
             plan.setdefault("meta", {})
             plan["meta"].update({
@@ -304,24 +325,9 @@ def propose_patrol_plans(
                 "diversify_gamma": diversify_gamma,
             })
 
-            # planın top-N hücrelerini güncelle (çeşitlilik için)
-            try:
-                # Eğer plan "planned_cells" veriyorsa onu kullan,
-                # yoksa df_i'de expected'e göre nlargest al.
-                cells: list[str] = []
-                zones = plan.get("zones", [])
-                for z in zones:
-                    cells.extend((z.get("planned_cells") or z.get("cells") or []))
-                if cells:
-                    top_ids = set(map(str, cells))
-                else:
-                    top_ids = set(
-                        df_i.sort_values("expected", ascending=False)
-                           .head(int(diversify_top_n))[key_col].astype(str).tolist()
-                    )
-                already_top |= top_ids
-            except Exception:
-                pass
+            # planın top hücrelerini biriktir (çeşitlilik için)
+            top_ids = _collect_top_geoids_from_plan(plan, key_col=key_col, fallback_df=df_i, top_n=diversify_top_n)
+            already_top |= top_ids
 
         plans.append(plan)
 
@@ -329,7 +335,7 @@ def propose_patrol_plans(
 
 
 # ───────────────────────────── seçim & kayıt yardımcıları ─────────────────────────────
-def pick_plan(plans: list[dict], idx: int = 0) -> dict:
+def pick_plan(plans: List[dict], idx: int = 0) -> dict:
     """Plan listesinden güvenli seçim (out-of-range → ilk plan)."""
     if not plans:
         return {}
@@ -339,7 +345,7 @@ def pick_plan(plans: list[dict], idx: int = 0) -> dict:
     return plans[i] or {}
 
 
-def save_selected_plan(plans: list[dict], idx: int = 0, meta: dict | None = None, path: str = "data/patrol_logs.json") -> dict:
+def save_selected_plan(plans: List[dict], idx: int = 0, meta: dict | None = None, path: str = "data/patrol_logs.json") -> dict:
     """
     UI’de kullanıcı seçimi sonrası planı kalıcı kaydet.
     Dönüş: Kaydedilen plan (boşsa {}).
@@ -348,3 +354,94 @@ def save_selected_plan(plans: list[dict], idx: int = 0, meta: dict | None = None
     if plan:
         save_plan(plan, meta=meta or {}, path=path)
     return plan
+
+
+# ───────────────────────────── kısa yol sarmalayıcılar (UI) ─────────────────────────────
+def make_priority_plans(
+    base_df: pd.DataFrame,
+    geo_df: pd.DataFrame,
+    k_planned: int,
+    duty_minutes: int,
+    cell_minutes: int = 6,
+    *,
+    n_plans: int = 3,               # 2–3 öneri için 2 veya 3 yap
+    travel_overhead: float = 0.40,
+    seed: Optional[int] = 101,
+) -> List[dict]:
+    """Risk-öncelikli çoklu plan (kullanım: 2–3 adet)."""
+    try:
+        from utils.patrol import allocate_patrols as _alloc
+    except Exception:
+        raise ImportError("utils.patrol.allocate_patrols bulunamadı")
+
+    allocate_priority = partial(
+        _alloc,
+        strategy="priority",
+        init="topk",
+        distance_push_alpha=0.0,  # risk öncelikli modda yayılma itişi kapalı
+    )
+
+    return propose_patrol_plans(
+        base_df=base_df,
+        geo_df=geo_df,
+        k_planned=k_planned,
+        duty_minutes=duty_minutes,
+        cell_minutes=cell_minutes,
+        allocate_fn=allocate_priority,
+        n_plans=n_plans,
+        travel_overhead=travel_overhead,
+        seed=seed,
+        # risk öncelikli: yüksekleri daha çok ödüllendir
+        dist={"Çok Yüksek": 1.0, "Yüksek": 0.7, "Orta": 0.4, "Düşük": 0.2, "Çok Düşük": 0.1},
+        diversify=True,
+        diversify_top_n=60,
+        diversify_gamma=0.25,
+    )
+
+
+def make_balanced_plans(
+    base_df: pd.DataFrame,
+    geo_df: pd.DataFrame,
+    k_planned: int,
+    duty_minutes: int,
+    cell_minutes: int = 6,
+    *,
+    n_plans: int = 6,               # 5–6 öneri için 5 veya 6 yap
+    travel_overhead: float = 0.40,
+    tier_quota: Optional[Dict[str, float]] = None,
+    distance_push_alpha: float = 0.15,
+    seed: Optional[int] = 707,
+) -> List[dict]:
+    """Kotalı-dengeli çoklu plan (kullanım: 5–6 adet)."""
+    try:
+        from utils.patrol import allocate_patrols as _alloc
+    except Exception:
+        raise ImportError("utils.patrol.allocate_patrols bulunamadı")
+
+    if tier_quota is None:
+        tier_quota = DEFAULT_DIST  # aynı yapıda; allocate içinde quota olarak kullanılabilir
+
+    allocate_balanced = partial(
+        _alloc,
+        strategy="balanced",
+        tier_quota=tier_quota,
+        distance_push_alpha=distance_push_alpha,
+        init="farthest",     # merkezler yayılır
+        jitter_scale=2e-4,   # küçük geometri jitter
+    )
+
+    return propose_patrol_plans(
+        base_df=base_df,
+        geo_df=geo_df,
+        k_planned=k_planned,
+        duty_minutes=duty_minutes,
+        cell_minutes=cell_minutes,
+        allocate_fn=allocate_balanced,
+        n_plans=n_plans,
+        travel_overhead=travel_overhead,
+        seed=seed,
+        dist=DEFAULT_DIST,
+        diversify=True,
+        diversify_top_n=80,
+        diversify_gamma=0.35,
+    )
