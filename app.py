@@ -1,17 +1,26 @@
 from __future__ import annotations
-
 import os, sys
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
+import streamlit as st
+st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli Yeni Versiyon", layout="wide")  # ← ilk Streamlit çağrısı
+
 import folium
 import numpy as np
 import pandas as pd
-import streamlit as st
 from streamlit_folium import st_folium
 
+# ── constants / local imports vs.
+from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
+from utils.geo import load_geoid_layer, resolve_clicked_gid
+from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
+from utils.patrol import allocate_patrols
+# (buraya esnek sarmalayıcıyı ekle)
+
 import inspect
-from utils.patrol import allocate_patrols as _ap
+from utils.patrol import allocate_patrols as __ap
+print("allocate_patrols signature:", inspect.signature(__ap))
 st.write("allocate_patrols signature:", inspect.signature(_ap))
 
 # ── constants
@@ -35,7 +44,6 @@ from utils.ui import (
     render_day_hour_heatmap as _fallback_heatmap,
 )
 
-# >>> BURADAN SONRA EKLE
 import inspect
 try:
     from utils.patrol import allocate_patrols as _allocate_patrols
@@ -47,14 +55,15 @@ def allocate_patrols(*args, **kwargs):
         raise RuntimeError("utils.patrol.allocate_patrols import edilemedi.")
     params = set(inspect.signature(_allocate_patrols).parameters.keys())
 
-    # K ailesini gerçek ada eşle
+    # K/k/… → k_planned’e eşle
     for alias in ["K", "k", "n", "num_units", "n_units", "units", "num_zones", "count"]:
         if alias in kwargs:
-            # hedef ad: imzada hangisi varsa onu kullan
-            target = next((p for p in ["k","n","num_units","units"] if p in params), None)
-            if target and target != alias:
-                kwargs[target] = kwargs.pop(alias)
+            if "k_planned" not in kwargs:
+                kwargs["k_planned"] = kwargs.pop(alias)
+            else:
+                kwargs.pop(alias, None)
             break
+
     return _allocate_patrols(*args, **kwargs)
     
 # utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
@@ -508,12 +517,11 @@ if sekme == "Operasyon":
                     plan = allocate_patrols(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        k=int(K_planned),                  # ← büyük K
+                        k_planned=int(K_planned),      # ← doğru ad
                         duty_minutes=int(duty_minutes),
                         cell_minutes=int(cell_minutes),
-                        start_iso=st.session_state.get("start_iso"),
-                        horizon_h=int(st.session_state.get("horizon_h") or 24),
-                    )
+                        travel_overhead=0.4,
+                    )        
                     st.session_state["patrol"] = _normalize_patrol(plan, GEO_DF, agg)
                     st.experimental_rerun()  # rotayı hemen çizmek için yeniden çalıştır
                 except Exception as e:
