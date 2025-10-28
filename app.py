@@ -474,26 +474,31 @@ if sekme == "Operasyon":
                                      "events": st.session_state.get("events_df")})
 
         agg = st.session_state["agg"]
-        # >>> YENİ: Devriye planını hesapla ve state'e yaz
         if btn_patrol:
             if isinstance(agg, pd.DataFrame) and not agg.empty:
                 try:
                     plan = allocate_patrols(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        K=int(K_planned),                  # ← büyük K
+                        k_planned=int(K_planned),      # ← 'K' değil 'k_planned'
                         duty_minutes=int(duty_minutes),
                         cell_minutes=int(cell_minutes),
-                        start_iso=st.session_state.get("start_iso"),
-                        horizon_h=int(st.session_state.get("horizon_h") or 24),
+                        # travel_overhead parametresi gerekiyorsa burada ekleyebilirsin:
+                        # travel_overhead=0.4,
                     )
                     st.session_state["patrol"] = _normalize_patrol(plan, GEO_DF, agg)
-                    st.experimental_rerun()  # rotayı hemen çizmek için yeniden çalıştır
+        
+                    # İstersen meta ekleyebilirsin (allocate_patrols imzasını bozmadan):
+                    st.session_state["patrol"]["meta"] = {
+                        "start_iso": st.session_state.get("start_iso"),
+                        "horizon_h": int(st.session_state.get("horizon_h") or 24),
+                    }
+        
+                    st.experimental_rerun()  # rotayı hemen çizmek için
                 except Exception as e:
                     st.error(f"Devriye planı oluşturulamadı: {e}")
             else:
                 st.warning("Önce ‘Tahmin et’ ile risk haritasını üretin.")
-
         
         events_all = st.session_state.get("events")
         lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
