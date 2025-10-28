@@ -1,10 +1,10 @@
-# app.py — SUTAM: Suç Tahmin Modeli (tam revize)
+# app.py — SUTAM: Suç Tahmin Modeli (tam revize, iki modlu devriye planlaması)
 
 from __future__ import annotations
 
 import os, sys
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, List
 
 import folium
 import numpy as np
@@ -23,7 +23,7 @@ if PROJECT_ROOT not in sys.path:
 # ── local modules
 from utils.geo import load_geoid_layer, resolve_clicked_gid
 from utils.forecast import precompute_base_intensity, aggregate_fast, prob_ge_k
-from utils.patrol import allocate_patrols
+from utils.patrol import allocate_patrols  # (tek plan için, hala yedekte)
 from utils.ui import (
     SMALL_UI_CSS,
     render_result_card,
@@ -32,9 +32,13 @@ from utils.ui import (
     render_day_hour_heatmap as _fallback_heatmap,
 )
 
-# 🔗 YENİ: Çoklu devriye planı üretme / kaydetme yardımcıları
-# (utils/patrol_planner.py içinde olmalı: propose_patrol_plans, save_plan)
-from utils.patrol_planner import propose_patrol_plans, save_selected_plan
+# 🔗 Çoklu devriye planı üretme / kaydetme yardımcıları (iki modlu hazır wrap'ler dahil)
+from utils.patrol_planner import (
+    propose_patrol_plans,        # genel API (kalsın)
+    save_selected_plan,
+    make_priority_plans,         # ⚡ Risk Öncelikli (3 bölge)
+    make_balanced_plans,         # 🧭 Kotalı Dengeli (k bölge)
+)
 
 # utils/heatmap varsa onu kullan, yoksa ui.py'deki fallback'i kullan
 try:
@@ -99,59 +103,6 @@ def _norm_point(pt):
         return (b, a) if abs(a) > 100 and abs(b) < 100 else (a, b)
     return None
 
-def _route_from_cells(zone, geo_df):
-    cells = zone.get("cells") or zone.get("planned_cells") or []
-    if not cells: return []
-    df = geo_df.copy()
-    df[KEY_COL] = df[KEY_COL].astype(str)
-    sel = df[df[KEY_COL].isin([str(c) for c in cells])]
-    if sel.empty or not {"centroid_lat","centroid_lon"}.issubset(sel.columns): return []
-    if "expected" in sel.columns:
-        sel = sel.sort_values("expected", ascending=False)
-    return list(zip(sel["centroid_lat"].astype(float), sel["centroid_lon"].astype(float)))
-
-def _centroid_for_zone(zone, route):
-    c = zone.get("centroid")
-    if isinstance(c, dict) and {"lat","lon"} <= set(c.keys()):
-        lat, lon = _to_float(c["lat"]), _to_float(c["lon"])
-        if lat is not None and lon is not None:
-            return {"lat": lat, "lon": lon}
-    if route:
-        i = len(route)//2
-        return {"lat": float(route[i][0]), "lon": float(route[i][1])}
-    return None
-
-def _normalize_patrol(patrol, geo_df, agg_df):
-    """utils.patrol.allocate_patrols çıktısını folium çizimine uygun hale getirir."""
-    if not patrol or not isinstance(patrol, dict):
-        return {"zones": []}
-    zones = patrol.get("zones") or patrol.get("Zones") or patrol.get("data") or []
-    out = []
-    for z in zones:
-        zid = z.get("id") or z.get("zone") or f"Z{len(out)+1}"
-        # route normalizasyonu
-        raw_route = z.get("route") or []
-        route = []
-        for pt in raw_route:
-            p = _norm_point(pt)
-            if p: route.append(p)
-        if not route:
-            # cell listesi varsa centroidlerden rota türet
-            route = _route_from_cells(z, geo_df)
-        cen = _centroid_for_zone(z, route)
-        out.append({
-            "id": str(zid),
-            "route": route,  # [(lat,lon), ...] olabilir ya da boş olabilir
-            "centroid": cen or {"lat": 37.7749, "lon": -122.4194},
-            "cells": z.get("cells") or z.get("planned_cells") or [],
-            "expected_risk": float(z.get("expected_risk", 0.0)),
-            "eta_minutes": int(z.get("eta_minutes", 0)),
-            "utilization_pct": float(z.get("utilization_pct", 0.0)),
-            "planned_cells": z.get("planned_cells", []),
-            "capacity_cells": z.get("capacity_cells", 0),
-        })
-    return {"zones": out}
-
 def ensure_keycol(df: pd.DataFrame, want: str = KEY_COL) -> pd.DataFrame:
     if df is None or df.empty:
         return df
@@ -178,6 +129,58 @@ def ensure_centroid_cols(df: pd.DataFrame) -> pd.DataFrame:
         if "CENTROID_LON" in out.columns: rn["CENTROID_LON"] = "centroid_lon"
         if "lon" in out.columns and "centroid_lat" in out.columns: rn["lon"] = "centroid_lon"
     return out.rename(columns=rn) if rn else out
+
+def _route_from_cells(zone: dict, geo_df: pd.DataFrame) -> List[tuple]:
+    # 'planned_cells' int olabilir → yalnızca 'cells' listesi güvenli
+    cells = zone.get("cells") or []
+    if not cells: return []
+    df = geo_df.copy()
+    df[KEY_COL] = df[KEY_COL].astype(str)
+    sel = df[df[KEY_COL].isin([str(c) for c in cells])]
+    if sel.empty or not {"centroid_lat","centroid_lon"}.issubset(sel.columns): return []
+    if "expected" in sel.columns:
+        sel = sel.sort_values("expected", ascending=False)
+    return list(zip(sel["centroid_lat"].astype(float), sel["centroid_lon"].astype(float)))
+
+def _centroid_for_zone(zone: dict, route: List[tuple]) -> dict | None:
+    c = zone.get("centroid")
+    if isinstance(c, dict) and {"lat","lon"} <= set(c.keys()):
+        lat, lon = _to_float(c["lat"]), _to_float(c["lon"])
+        if lat is not None and lon is not None:
+            return {"lat": lat, "lon": lon}
+    if route:
+        i = len(route)//2
+        return {"lat": float(route[i][0]), "lon": float(route[i][1])}
+    return None
+
+def _normalize_patrol(patrol: dict, geo_df: pd.DataFrame, agg_df: pd.DataFrame) -> dict:
+    """utils.patrol.allocate_patrols / planner çıktısını folium çizimine normalize eder."""
+    if not patrol or not isinstance(patrol, dict):
+        return {"zones": []}
+    zones = patrol.get("zones") or patrol.get("Zones") or patrol.get("data") or []
+    out = []
+    for z in zones:
+        zid = z.get("id") or z.get("zone") or f"Z{len(out)+1}"
+        raw_route = z.get("route") or []
+        route = []
+        for pt in raw_route:
+            p = _norm_point(pt)
+            if p: route.append(p)
+        if not route:
+            route = _route_from_cells(z, geo_df)
+        cen = _centroid_for_zone(z, route)
+        out.append({
+            "id": str(zid),
+            "route": route,  # [(lat,lon), ...]
+            "centroid": cen or {"lat": 37.7749, "lon": -122.4194},
+            "cells": z.get("cells") or [],
+            "expected_risk": float(z.get("expected_risk", 0.0)),
+            "eta_minutes": int(z.get("eta_minutes", 0)),
+            "utilization_pct": float(z.get("utilization_pct", 0.0)),
+            "planned_cells": int(z.get("planned_cells", 0)),   # sayı olarak gösterim
+            "capacity_cells": int(z.get("capacity_cells", 0)),
+        })
+    return {"zones": out}
 
 def now_sf_iso() -> str:
     return (datetime.utcnow() + timedelta(hours=SF_TZ_OFFSET)).isoformat(timespec="seconds")
@@ -231,9 +234,9 @@ def render_top_badge(model_version: str, last_train: str, last_update_iso: str, 
         f"• Model: {model_version}",
         f"• Son eğitim: {last_train}",
         f"• Günlük güncellenir: ~{daily_time_label} (SF)",
-        f"• Son güncelleme (SF): {last_update_iso}",
+        f"• Son güncelleme (SF): {last_update_iso}%",
     ]
-    st.markdown(" ".join(parts))
+    st.markdown(" ".join(parts).replace("%%", "%"))
 
 def run_prediction(
     start_h: int,
@@ -448,13 +451,13 @@ with st.sidebar:
     K_planned    = st.number_input("Planlanan devriye sayısı (K)", 1, 50, 6, 1)
     duty_minutes = st.number_input("Devriye görev süresi (dk)", 15, 600, 120, 15)
     cell_minutes = st.number_input("Hücre başına ort. kontrol (dk)", 2, 30, 6, 1)
-    multi_mode   = st.checkbox("5 alternatif plan üret", value=True)  # ← YENİ
+
+    # iki mod – iki buton
+    colA1, colA2 = st.columns(2)
+    btn_priority = colA1.button("⚡ Risk Öncelikli (3 bölge)")
+    btn_balanced = colA2.button("🧭 Kotalı Dengeli (k bölge)")
 
     run_hourly_heatmap = False
-
-    colA, colB = st.columns(2)
-    btn_predict = colA.button("Tahmin et")
-    btn_patrol  = colB.button("Devriye öner")
 
 # ── state
 st.session_state.setdefault("agg", None)
@@ -463,8 +466,8 @@ st.session_state.setdefault("patrol", None)
 st.session_state.setdefault("start_iso", None)
 st.session_state.setdefault("horizon_h", None)
 st.session_state.setdefault("explain", {})
-# YENİ: çoklu plan listesi ve seçim indeksi
-st.session_state.setdefault("patrol_plans", None)   # list[dict] (ham planlar)
+# Çoklu plan listesi ve seçim indeksi
+st.session_state.setdefault("patrol_plans", None)   # list[dict]
 st.session_state.setdefault("patrol_choice", 1)     # 1..N
 
 # ── main
@@ -472,7 +475,8 @@ if sekme == "Operasyon":
     col1, col2 = st.columns([2.4, 1.0])
 
     with col1:
-        if btn_predict or st.session_state["agg"] is None:
+        # Tahmin (ilk girişte otomatik)
+        if st.session_state["agg"] is None:
             agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
             st.session_state.update({"agg": agg, "agg_long": agg_long, "patrol": None,
                                      "start_iso": start_iso, "horizon_h": horizon_h,
@@ -480,40 +484,44 @@ if sekme == "Operasyon":
 
         agg = st.session_state["agg"]
 
-        # YENİ: Devriye öner
-        if btn_patrol:
+        # === İKİ MOD: Devriye öner ===
+        if btn_priority or btn_balanced:
             if isinstance(agg, pd.DataFrame) and not agg.empty:
                 try:
-                    if multi_mode:
-                        plans = propose_patrol_plans(
+                    if btn_priority:
+                        # 2–3 alternatif plan (3 bölge)
+                        plans = make_priority_plans(
                             base_df=agg,
                             geo_df=GEO_DF,
-                            k_planned=int(K_planned),
+                            k_planned=3,                 # sabit 3 bölge
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
-                            allocate_fn=allocate_patrols,
-                            n_plans=5,
-                            logs_path="data/patrol_logs.json",
-                            fatigue_hours=24,
-                            fatigue_alpha=0.25,
+                            n_plans=3                    # 2–3 öneri için 3
                         )
-                        st.session_state["patrol_plans"] = plans
-                        st.session_state["patrol_choice"] = 1
-                        chosen = plans[0]
+                        mode_label = "Risk Öncelikli"
                     else:
-                        chosen = allocate_patrols(
-                            df_agg=agg,
+                        # 5–6 alternatif plan (k bölge)
+                        plans = make_balanced_plans(
+                            base_df=agg,
                             geo_df=GEO_DF,
-                            k_planned=int(K_planned),
+                            k_planned=int(K_planned),    # kullanıcının seçtiği k
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
+                            n_plans=6                    # 5–6 öneri için 6
                         )
-        
+                        mode_label = "Kotalı Dengeli"
+
+                    st.session_state["patrol_plans"] = plans
+                    st.session_state["patrol_choice"] = 1
+                    chosen = plans[0] if plans else {}
+
                     st.session_state["patrol"] = _normalize_patrol(chosen, GEO_DF, agg)
-                    st.session_state["patrol"]["meta"] = {
+                    st.session_state.setdefault("patrol", {}).setdefault("meta", {})
+                    st.session_state["patrol"]["meta"].update({
                         "start_iso": st.session_state.get("start_iso"),
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
-                    }
+                        "mode": mode_label,
+                    })
                     st.rerun()
                 except Exception as e:
                     st.error(f"Devriye planı oluşturulamadı: {e}")
@@ -522,23 +530,22 @@ if sekme == "Operasyon":
 
         # === HARİTA ===
         if agg is not None:
-            # 🔹 Geçici hotspot noktaları
+            # Geçici hotspot noktaları
             events_all = st.session_state.get("events")
             lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
             ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
                                          lookback_h, hotspot_cat)
-            
             if scope == "Seçili hücre" and st.session_state.get("explain", {}).get("geoid") and KEY_COL in ev_recent_df.columns:
                 gid = str(st.session_state["explain"]["geoid"])
                 ev_recent_df = ev_recent_df[ev_recent_df[KEY_COL].astype(str) == gid]
-            
+
             temp_points = ev_recent_df[["latitude", "longitude", "weight"]] if not ev_recent_df.empty \
                           else pd.DataFrame(columns=["latitude", "longitude", "weight"])
-            
+
             if use_hot_hours and not temp_points.empty and "ts" in ev_recent_df.columns:
                 h1, h2 = hot_hours_rng[0], (hot_hours_rng[1] - 1) % 24
                 temp_points = ev_recent_df[ev_recent_df["ts"].dt.hour.between(h1, h2)][["latitude", "longitude", "weight"]]
-            
+
             if temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
                 temp_points = make_temp_hotspot_from_agg(agg, GEO_DF, topn=80)
 
@@ -561,7 +568,7 @@ if sekme == "Operasyon":
                         show_hotspot=True, perm_hotspot_mode="heat",
                         show_temp_hotspot=True, temp_hotspot_points=temp_points,
                     )
-                # remove internal LC, add our LC
+                # iç LayerControl’ü kaldır; kendi LC’mizi ekleyelim
                 for k, ch in list(m._children.items()):
                     if isinstance(ch, folium.map.LayerControl):
                         del m._children[k]
@@ -604,12 +611,13 @@ if sekme == "Operasyon":
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
-        st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
-        
-        # === YENİ: Alternatif Plan Seçimi / Kaydetme ===
+        st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points) if isinstance(temp_points, pd.DataFrame) else 0}")
+
+        # === Alternatif Plan Seçimi / Kaydetme ===
         plans = st.session_state.get("patrol_plans") or []
         if plans:
-            idxs = [f"Plan {i+1}" for i in range(len(plans))]
+            mode_txt = st.session_state.get("patrol", {}).get("meta", {}).get("mode", "Öneri")
+            idxs = [f"{mode_txt} – Plan {i+1}" for i in range(len(plans))]
             choice_lbl = st.radio(
                 "Önerilen plan seç:",
                 idxs,
@@ -617,7 +625,7 @@ if sekme == "Operasyon":
                 horizontal=True,
                 key=f"plan_choice_radio_{len(plans)}"
             )
-            choice = int(choice_lbl.split()[-1])  # 1..N
+            choice = int(choice_lbl.split()[-1])  # 'Plan N' sonundaki N
             st.session_state["patrol_choice"] = choice
 
             # Haritada seçilen planı göster
@@ -636,6 +644,7 @@ if sekme == "Operasyon":
                     "duty_minutes": int(duty_minutes),
                     "cell_minutes": int(cell_minutes),
                     "model_version": MODEL_VERSION,
+                    "mode": mode_txt,
                 }
                 try:
                     save_selected_plan(plans, idx=choice-1, meta=meta, path="data/patrol_logs.json")
@@ -667,38 +676,51 @@ if sekme == "Operasyon":
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
                 ("Çok Yüksek", cnts["Çok Yüksek"], "En yüksek riskli hücre sayısı (üst %20)"),
-                ("Yüksek", cnts["Yüksek"], "Yüksek kademe riskli hücre sayısı"),
-                ("Orta", cnts["Orta"], "Orta kademe riskli hücre sayısı"),
-                ("Düşük", cnts["Düşük"], "Düşük kademe riskli hücre sayısı"),
-                ("Çok Düşük", cnts["Çok Düşük"], "En düşük riskli hücre sayısı (alt %20)"),
+                ("Yüksek",     cnts["Yüksek"],     "Yüksek kademe riskli hücre sayısı"),
+                ("Orta",       cnts["Orta"],       "Orta kademe riskli hücre sayısı"),
+                ("Düşük",      cnts["Düşük"],      "Düşük kademe riskli hücre sayısı"),
+                ("Çok Düşük",  cnts["Çok Düşük"],  "En düşük riskli hücre sayısı (alt %20)"),
             ])
         else:
             st.info("Önce ‘Tahmin et’ ile bir tahmin üretin.")
 
         st.subheader("Top-5 kritik GEOID")
         if isinstance(a, pd.DataFrame) and not a.empty:
-            tab = top_risky_table(a, n=5, show_ci=True,
-                                  start_iso=st.session_state.get("start_iso"),
-                                  horizon_h=int(st.session_state.get("horizon_h") or 0))
+            tab = top_risky_table(
+                a,
+                n=5,
+                show_ci=True,
+                start_iso=st.session_state.get("start_iso"),
+                horizon_h=int(st.session_state.get("horizon_h") or 0),
+            )
             st.dataframe(tab, use_container_width=True)
             st.markdown("Seç / odağı haritada göster:")
             cols = st.columns(len(tab))
             for i, row in enumerate(tab.itertuples()):
                 with cols[i]:
-                    if st.button(str(row.geoid)):
+                    if st.button(str(row.geoid), key=f"btn_geoid_{i}"):
                         st.session_state["explain"] = {"geoid": str(row.geoid)}
-                        st.rerun()  # YENİ: experimental_rerun → rerun
+                        st.rerun()
             st.caption("Butona tıklayınca haritada centroid işaretlenir ve açıklama kartı güncellenir.")
+        else:
+            st.caption("Tablo, bir tahmin üretildiğinde gösterilir.")
 
         st.subheader("Devriye özeti")
         patrol = st.session_state.get("patrol")
         if patrol and patrol.get("zones"):
-            rows = [{
-                "zone": z["id"], "cells_planned": z["planned_cells"], "capacity_cells": z["capacity_cells"],
-                "eta_minutes": z["eta_minutes"], "utilization_%": z["utilization_pct"],
-                "avg_risk(E[olay])": round(z["expected_risk"], 2),
-            } for z in patrol["zones"]]
+            rows = []
+            for z in patrol["zones"]:
+                rows.append({
+                    "zone": z.get("id"),
+                    "cells_planned": z.get("planned_cells", 0),   # sayı
+                    "capacity_cells": z.get("capacity_cells", 0),
+                    "eta_minutes": z.get("eta_minutes", 0),
+                    "utilization_%": z.get("utilization_pct", 0),
+                    "avg_risk(E[olay])": round(float(z.get("expected_risk", 0.0)), 2),
+                })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, height=260)
+        else:
+            st.caption("Henüz devriye planı yok. ‘⚡ Risk Öncelikli’ veya ‘🧭 Kotalı Dengeli’ ile plan üretin.")
 
         st.subheader("Gün × Saat Isı Matrisi")
         if st.session_state.get("agg") is not None and st.session_state.get("start_iso"):
@@ -710,12 +732,3 @@ if sekme == "Operasyon":
             )
         else:
             st.caption("Isı matrisi, bir tahmin üretildiğinde gösterilir.")
-
-# ── reports tab
-elif sekme == "Raporlar":
-    agg_current = st.session_state.get("agg")
-    agg_long = st.session_state.get("agg_long")
-    events_src = st.session_state.get("events")
-    if not isinstance(events_src, pd.DataFrame) or events_src.empty:
-        events_src = st.session_state.get("events_df")
-    render_reports(events_df=events_src, agg_current=agg_current, agg_long_term=agg_long)
