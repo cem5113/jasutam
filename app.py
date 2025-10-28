@@ -19,9 +19,13 @@ from utils.patrol import allocate_patrols
 # (buraya esnek sarmalayıcıyı ekle)
 
 import inspect
-from utils.patrol import allocate_patrols as __ap
-print("allocate_patrols signature:", inspect.signature(__ap))
-st.write("allocate_patrols signature:", inspect.signature(_ap))
+from utils.patrol import allocate_patrols as _ap
+
+# güvenli imza yazdırma (log/debug)
+try:
+    st.write("allocate_patrols signature:", str(inspect.signature(_ap)))
+except Exception as e:
+    st.write("allocate_patrols signature okunamadı:", str(e))
 
 # ── constants
 from utils.constants import SF_TZ_OFFSET, KEY_COL, MODEL_VERSION, MODEL_LAST_TRAIN, CATEGORIES
@@ -50,10 +54,14 @@ try:
 except Exception:
     _allocate_patrols = None
 
+from utils.patrol import allocate_patrols as __allocate_patrols
 def allocate_patrols(*args, **kwargs):
-    if _allocate_patrols is None:
-        raise RuntimeError("utils.patrol.allocate_patrols import edilemedi.")
-    params = set(inspect.signature(_allocate_patrols).parameters.keys())
+    if "k_planned" not in kwargs:
+        for alias in ["K", "k", "n", "num_units", "n_units", "units", "num_zones", "count"]:
+            if alias in kwargs:
+                kwargs["k_planned"] = kwargs.pop(alias)
+                break
+    return __allocate_patrols(*args, **kwargs)
 
     # K/k/… → k_planned’e eşle
     for alias in ["K", "k", "n", "num_units", "n_units", "units", "num_zones", "count"]:
@@ -517,11 +525,11 @@ if sekme == "Operasyon":
                     plan = allocate_patrols(
                         df_agg=agg,
                         geo_df=GEO_DF,
-                        k_planned=int(K_planned),      # ← doğru ad
+                        k_planned=int(K_planned),     # ← doğru argüman adı
                         duty_minutes=int(duty_minutes),
                         cell_minutes=int(cell_minutes),
-                        travel_overhead=0.4,
-                    )        
+                        # travel_overhead=0.4  # varsa opsiyonel
+                    )     
                     st.session_state["patrol"] = _normalize_patrol(plan, GEO_DF, agg)
                     st.experimental_rerun()  # rotayı hemen çizmek için yeniden çalıştır
                 except Exception as e:
