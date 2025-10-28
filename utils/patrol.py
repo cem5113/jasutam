@@ -56,8 +56,7 @@ def allocate_patrols(df_agg: pd.DataFrame, geo_df: pd.DataFrame,
     df = _ensure_tier(df_agg.copy())
     df[KEY_COL] = df[KEY_COL].astype(str)
 
-    # En riskli üç kademe: Çok Yüksek + Yüksek + Orta
-    cand = df[df["tier"].isin(["Çok Yüksek", "Yüksek", "Orta"])].copy()
+    cand = df[df["tier"].isin(["Çok Yüksek", "Yüksek", "Orta",  "Düşük", "Çok Düşük"])].copy()
     if cand.empty:
         return {"zones": []}
 
