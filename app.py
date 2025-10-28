@@ -456,6 +456,8 @@ with st.sidebar:
     btn_predict = colA.button("Tahmin et")
     btn_patrol  = colB.button("Devriye öner")
 
+st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points)}")
+
 # ── state
 st.session_state.setdefault("agg", None)
 st.session_state.setdefault("agg_long", None)
@@ -522,6 +524,26 @@ if sekme == "Operasyon":
 
         # === HARİTA ===
         if agg is not None:
+            # 🔹 Geçici hotspot noktaları
+            events_all = st.session_state.get("events")
+            lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
+            ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
+                                         lookback_h, hotspot_cat)
+            
+            if scope == "Seçili hücre" and st.session_state.get("explain", {}).get("geoid") and KEY_COL in ev_recent_df.columns:
+                gid = str(st.session_state["explain"]["geoid"])
+                ev_recent_df = ev_recent_df[ev_recent_df[KEY_COL].astype(str) == gid]
+            
+            temp_points = ev_recent_df[["latitude", "longitude", "weight"]] if not ev_recent_df.empty \
+                          else pd.DataFrame(columns=["latitude", "longitude", "weight"])
+            
+            if use_hot_hours and not temp_points.empty and "ts" in ev_recent_df.columns:
+                h1, h2 = hot_hours_rng[0], (hot_hours_rng[1] - 1) % 24
+                temp_points = ev_recent_df[ev_recent_df["ts"].dt.hour.between(h1, h2)][["latitude", "longitude", "weight"]]
+            
+            if temp_points.empty and isinstance(agg, pd.DataFrame) and not agg.empty:
+                temp_points = make_temp_hotspot_from_agg(agg, GEO_DF, topn=80)
+
             if engine == "Folium":
                 try:
                     m = build_map_fast(
