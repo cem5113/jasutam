@@ -85,12 +85,6 @@ except Exception:
         return df
 
 # ───────────────────────────────── helpers ─────────────────────────────────
-def ss_get(key, default=None):
-    try:
-        return st.session_state[key]
-    except KeyError:
-        return default
-        
 def _to_float(x, default=None):
     try: return float(x)
     except Exception: return default
@@ -239,7 +233,7 @@ def render_top_badge(model_version: str, last_train: str, last_update_iso: str, 
         f"• Model: {model_version}",
         f"• Son eğitim: {last_train}",
         f"• Günlük güncellenir: ~{daily_time_label} (SF)",
-        f"• Son güncelleme (SF): {last_update_iso}",
+        f"• Son güncelleme (SF): {last_update_iso}%",
     ]
     st.markdown(" ".join(parts).replace("%%", "%"))
 
@@ -496,36 +490,6 @@ if sekme == "Operasyon":
         if btn_priority or btn_balanced:
             if isinstance(agg, pd.DataFrame) and not agg.empty:
                 try:
-                    # ────────────────────────────────
-                    # 🔹 Yol süresi sağlayıcısı seçimi
-                    # ────────────────────────────────
-                    from utils.travel import build_travel_time_fn
-        
-                    st.markdown("#### 🚗 Rota sağlayıcısı seçimi")
-                    provider = st.radio(
-                        "Rota hesaplama motoru",
-                        ["google", "osrm"],
-                        index=0,
-                        horizontal=True,
-                        help="Google: gerçek rota & trafik verisi (ücretli) • OSRM: ücretsiz, tahmini hız profili",
-                    )
-        
-                    geo2 = GEO_DF.copy()
-                    geo2["centroid_lat"] = pd.to_numeric(geo2["centroid_lat"], errors="coerce")
-                    geo2["centroid_lon"] = pd.to_numeric(geo2["centroid_lon"], errors="coerce")
-                    coords = list(zip(geo2["centroid_lat"], geo2["centroid_lon"]))
-        
-                    with st.spinner(f"‘{provider.upper()}’ rota sağlayıcısından mesafe/süre hesaplanıyor..."):
-                        try:
-                            travel_fn = build_travel_time_fn(coords, provider=provider)
-                            st.success(f"{provider.upper()} rota fonksiyonu başarıyla hazırlandı ✅")
-                        except Exception as e:
-                            st.warning(f"Rota sağlayıcısı hata verdi ({provider}): {e}")
-                            travel_fn = None
-        
-                    # ────────────────────────────────
-                    # 🔹 Devriye planlarını oluştur
-                    # ────────────────────────────────
                     if btn_priority:
                         plans = make_priority_plans(
                             base_df=agg,
@@ -533,8 +497,7 @@ if sekme == "Operasyon":
                             k_planned=3,
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
-                            n_plans=3,
-                            travel_time_fn=travel_fn,  # 🧭 gerçek yol süresi fonksiyonu
+                            n_plans=3
                         )
                         mode_label = "Risk Öncelikli"
                     else:
@@ -544,35 +507,26 @@ if sekme == "Operasyon":
                             k_planned=int(K_planned),
                             duty_minutes=int(duty_minutes),
                             cell_minutes=int(cell_minutes),
-                            n_plans=6,
-                            travel_time_fn=travel_fn,  # 🧭 gerçek yol süresi fonksiyonu
+                            n_plans=6
                         )
                         mode_label = "Kotalı Dengeli"
-        
-                    # ────────────────────────────────
-                    # 🔹 State güncelle
-                    # ────────────────────────────────
+
                     st.session_state["patrol_plans"] = plans
                     st.session_state["patrol_choice"] = 1
                     chosen = plans[0] if plans else {}
-        
+
                     st.session_state["patrol"] = _normalize_patrol(chosen, GEO_DF, agg)
                     st.session_state.setdefault("patrol", {}).setdefault("meta", {})
                     st.session_state["patrol"]["meta"].update({
                         "start_iso": st.session_state.get("start_iso"),
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
                         "mode": mode_label,
-                        "provider": provider,
                     })
-        
-                    st.success(f"✅ {mode_label} devriye planı üretildi ({provider.upper()} tabanlı)")
                     st.rerun()
-        
                 except Exception as e:
                     st.error(f"Devriye planı oluşturulamadı: {e}")
             else:
                 st.warning("Önce ‘🔮 Tahmin et’ ile risk haritasını üretin.")
-
 
         # === HARİTA ===
         if agg is not None:
@@ -656,40 +610,34 @@ if sekme == "Operasyon":
             st.info("Önce ‘🔮 Tahmin et’ ile bir tahmin üretin.")
 
         st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points) if isinstance(temp_points, pd.DataFrame) else 0}")
-        
+
         # === Alternatif Plan Seçimi / Kaydetme ===
-        plans = ss_get("patrol_plans", []) or []
+        plans = st.session_state.get("patrol_plans") or []
         if plans:
-            # Güvenli mode adı oku
-            _patrol_obj = ss_get("patrol", {})
-            if not isinstance(_patrol_obj, dict):
-                _patrol_obj = {}
-            _meta = _patrol_obj.get("meta") or {}
-            mode_txt = _meta.get("mode", "Öneri")
-        
+            mode_txt = st.session_state.get("patrol", {}).get("meta", {}).get("mode", "Öneri")
             idxs = [f"{mode_txt} – Plan {i+1}" for i in range(len(plans))]
             choice_lbl = st.radio(
                 "Önerilen plan seç:",
                 idxs,
-                index=max(0, min(len(plans), ss_get("patrol_choice", 1)) - 1),
+                index=max(0, min(len(plans), st.session_state.get("patrol_choice",1)) - 1),
                 horizontal=True,
                 key=f"plan_choice_radio_{len(plans)}"
             )
             choice = int(choice_lbl.split()[-1])  # 'Plan N'
             st.session_state["patrol_choice"] = choice
-        
+
             # Haritada seçili planı göster
-            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, ss_get("agg"))
-        
+            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+
             c1, c2 = st.columns(2)
             if c1.button("Bu planı uygula", key="apply_plan_btn"):
-                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, ss_get("agg"))
+                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
                 st.rerun()
-        
+
             if c2.button("Bu planı kaydet"):
                 meta = {
-                    "start_iso": ss_get("start_iso"),
-                    "horizon_h": int(ss_get("horizon_h") or 24),
+                    "start_iso": st.session_state.get("start_iso"),
+                    "horizon_h": int(st.session_state.get("horizon_h") or 24),
                     "k_planned": int(K_planned),
                     "duty_minutes": int(duty_minutes),
                     "cell_minutes": int(cell_minutes),
@@ -756,8 +704,8 @@ if sekme == "Operasyon":
             st.caption("Tablo, bir tahmin üretildiğinde gösterilir.")
 
         st.subheader("Devriye özeti")
-        patrol = st.session_state["patrol"] if "patrol" in st.session_state else None
-        if isinstance(patrol, dict) and patrol.get("zones"):
+        patrol = st.session_state.get("patrol")
+        if patrol and patrol.get("zones"):
             rows = []
             for z in patrol["zones"]:
                 rows.append({
