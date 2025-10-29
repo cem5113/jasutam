@@ -168,12 +168,13 @@ def allocate_patrols(
     duty_minutes: int,
     cell_minutes: int = 6,
     travel_overhead: float = 0.40,
-    strategy: str = "priority",                         # "priority" | "balanced"
-    tier_quota: Optional[Dict[str, float]] = None,      # balanced için
-    distance_push_alpha: float = 0.15,                  # balanced için
+    strategy: str = "priority",
+    tier_quota: Optional[Dict[str, float]] = None,
+    distance_push_alpha: float = 0.15,
     init: str = "farthest",
     random_state: Optional[int] = None,
-    jitter_scale: float = 0.0
+    jitter_scale: float = 0.0,
+    travel_time_fn=None,   # <── EKLENDİ
 ) -> Dict:
     """
     Tek devriye planı döndürür.
