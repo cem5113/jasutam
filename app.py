@@ -1,5 +1,4 @@
 # app.py — SUTAM: Suç Tahmin Modeli (tam revize, iki modlu devriye planlaması)
-
 from __future__ import annotations
 
 import os, sys
@@ -339,8 +338,7 @@ def top_risky_table(
     return df.drop(columns=drop)
 
 # ─────────────────────────── UI ───────────────────────────
-
-st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli Yeni Versiyon", layout="wide")
+st.set_page_config(page_title="SUTAM: Suç Tahmin Modeli", layout="wide")
 st.markdown(SMALL_UI_CSS, unsafe_allow_html=True)
 st.title("SUTAM: Suç Tahmin Modeli")
 
@@ -387,7 +385,7 @@ elif _MISS_CENTROID and _MISS_CENTROID > 0:
 # base intensity
 BASE_INT = precompute_base_intensity(GEO_DF)
 
-# ── sidebar
+# ── sidebar: Health + kontroller
 with st.sidebar.expander("🔎 Veri Tanı / Health Check", expanded=False):
     st.markdown("**GEO katmanı**")
     st.write("satır:", len(GEO_DF))
@@ -460,15 +458,15 @@ with st.sidebar:
 
     run_hourly_heatmap = False
 
-# ── state
+# ── state (revize: None yerine güvenli default)
 st.session_state.setdefault("agg", None)
 st.session_state.setdefault("agg_long", None)
-st.session_state.setdefault("patrol", None)
+st.session_state.setdefault("patrol", {})               # ← asla None değil
 st.session_state.setdefault("start_iso", None)
 st.session_state.setdefault("horizon_h", None)
 st.session_state.setdefault("explain", {})
-st.session_state.setdefault("patrol_plans", None)   # list[dict]
-st.session_state.setdefault("patrol_choice", 1)     # 1..N
+st.session_state.setdefault("patrol_plans", None)       # list[dict] | None
+st.session_state.setdefault("patrol_choice", 1)         # 1..N
 
 # ── main
 if sekme == "Operasyon":
@@ -476,15 +474,18 @@ if sekme == "Operasyon":
 
     with col1:
         # Tahmin (buton + ilk girişte otomatik)
-        if btn_predict or st.session_state["agg"] is None:
+        if btn_predict or st.session_state.get("agg") is None:
             agg, agg_long, start_iso, horizon_h = run_prediction(start_h, end_h, filters, GEO_DF, BASE_INT)
             st.session_state.update({
-                "agg": agg, "agg_long": agg_long, "patrol": None,
-                "start_iso": start_iso, "horizon_h": horizon_h,
+                "agg": agg,
+                "agg_long": agg_long,
+                "patrol": {},                         # ← reset dict
+                "start_iso": start_iso,
+                "horizon_h": horizon_h,
                 "events": st.session_state.get("events_df")
             })
 
-        agg = st.session_state["agg"]
+        agg = st.session_state.get("agg")
 
         # === İKİ MOD: Devriye öner ===
         if btn_priority or btn_balanced:
@@ -516,7 +517,7 @@ if sekme == "Operasyon":
                     chosen = plans[0] if plans else {}
 
                     st.session_state["patrol"] = _normalize_patrol(chosen, GEO_DF, agg)
-                    st.session_state.setdefault("patrol", {}).setdefault("meta", {})
+                    st.session_state["patrol"].setdefault("meta", {})  # güvence
                     st.session_state["patrol"]["meta"].update({
                         "start_iso": st.session_state.get("start_iso"),
                         "horizon_h": int(st.session_state.get("horizon_h") or 24),
@@ -529,7 +530,8 @@ if sekme == "Operasyon":
                 st.warning("Önce ‘🔮 Tahmin et’ ile risk haritasını üretin.")
 
         # === HARİTA ===
-        if agg is not None:
+        temp_points = pd.DataFrame(columns=["latitude", "longitude", "weight"])  # güvenli default
+        if isinstance(agg, pd.DataFrame):
             events_all = st.session_state.get("events")
             lookback_h = int(np.clip(2 * (st.session_state.get("horizon_h") or 24), 24, 72))
             ev_recent_df = recent_events(events_all if isinstance(events_all, pd.DataFrame) else pd.DataFrame(),
@@ -552,7 +554,7 @@ if sekme == "Operasyon":
                 try:
                     m = build_map_fast(
                         df_agg=agg, geo_features=GEO_FEATURES, geo_df=GEO_DF,
-                        show_popups=show_popups, patrol=st.session_state.get("patrol"),
+                        show_popups=show_popups, patrol=st.session_state.get("patrol") or {},
                         show_hotspot=True, perm_hotspot_mode="heat",
                         show_temp_hotspot=True, temp_hotspot_points=temp_points,
                         add_layer_control=False, risk_layer_show=True,
@@ -563,7 +565,7 @@ if sekme == "Operasyon":
                 except TypeError:
                     m = build_map_fast(
                         df_agg=agg, geo_features=GEO_FEATURES, geo_df=GEO_DF,
-                        show_popups=show_popups, patrol=st.session_state.get("patrol"),
+                        show_popups=show_popups, patrol=st.session_state.get("patrol") or {},
                         show_hotspot=True, perm_hotspot_mode="heat",
                         show_temp_hotspot=True, temp_hotspot_points=temp_points,
                     )
@@ -609,12 +611,14 @@ if sekme == "Operasyon":
         else:
             st.info("Önce ‘🔮 Tahmin et’ ile bir tahmin üretin.")
 
-        st.sidebar.caption(f"Geçici hotspot noktası: {len(temp_points) if isinstance(temp_points, pd.DataFrame) else 0}")
+        # Sidebar’a bilgi (güvenli)
+        tp_count = int(len(temp_points)) if isinstance(temp_points, pd.DataFrame) else 0
+        st.sidebar.caption(f"Geçici hotspot noktası: {tp_count}")
 
         # === Alternatif Plan Seçimi / Kaydetme ===
         plans = st.session_state.get("patrol_plans") or []
         if plans:
-            mode_txt = st.session_state.get("patrol", {}).get("meta", {}).get("mode", "Öneri")
+            mode_txt = ((st.session_state.get("patrol") or {}).get("meta", {}) or {}).get("mode", "Öneri")
             idxs = [f"{mode_txt} – Plan {i+1}" for i in range(len(plans))]
             choice_lbl = st.radio(
                 "Önerilen plan seç:",
@@ -623,15 +627,19 @@ if sekme == "Operasyon":
                 horizontal=True,
                 key=f"plan_choice_radio_{len(plans)}"
             )
-            choice = int(choice_lbl.split()[-1])  # 'Plan N'
+            # '... Plan N' → N
+            try:
+                choice = int(choice_lbl.split()[-1])
+            except Exception:
+                choice = 1
             st.session_state["patrol_choice"] = choice
 
             # Haritada seçili planı göster
-            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+            st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state.get("agg"))
 
             c1, c2 = st.columns(2)
             if c1.button("Bu planı uygula", key="apply_plan_btn"):
-                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state["agg"])
+                st.session_state["patrol"] = _normalize_patrol(plans[choice-1], GEO_DF, st.session_state.get("agg"))
                 st.rerun()
 
             if c2.button("Bu planı kaydet"):
@@ -663,13 +671,14 @@ if sekme == "Operasyon":
         st.subheader("Risk Özeti", anchor=False)
         a = st.session_state.get("agg")
         if isinstance(a, pd.DataFrame) and not a.empty:
-            kpi_expected = round(float(a["expected"].sum()), 2)
+            kpi_expected = round(float(pd.to_numeric(a["expected"], errors="coerce").fillna(0).sum()), 2)
+            tiers = a.get("tier", pd.Series([], dtype="string"))
             cnts = {
-                "Çok Yüksek": int((a.get("tier", pd.Series([], dtype="string")) == "Çok Yüksek").sum()),
-                "Yüksek":     int((a.get("tier", pd.Series([], dtype="string")) == "Yüksek").sum()),
-                "Orta":       int((a.get("tier", pd.Series([], dtype="string")) == "Orta").sum()),
-                "Düşük":      int((a.get("tier", pd.Series([], dtype="string")) == "Düşük").sum()),
-                "Çok Düşük":  int((a.get("tier", pd.Series([], dtype="string")) == "Çok Düşük").sum()),
+                "Çok Yüksek": int((tiers == "Çok Yüksek").sum()),
+                "Yüksek":     int((tiers == "Yüksek").sum()),
+                "Orta":       int((tiers == "Orta").sum()),
+                "Düşük":      int((tiers == "Düşük").sum()),
+                "Çok Düşük":  int((tiers == "Çok Düşük").sum()),
             }
             render_kpi_row([
                 ("Beklenen olay (ufuk)", kpi_expected, "Seçili zaman ufkunda toplam beklenen olay sayısı"),
@@ -704,10 +713,11 @@ if sekme == "Operasyon":
             st.caption("Tablo, bir tahmin üretildiğinde gösterilir.")
 
         st.subheader("Devriye özeti")
-        patrol = st.session_state.get("patrol")
-        if patrol and patrol.get("zones"):
+        patrol = st.session_state.get("patrol") or {}
+        zones = patrol.get("zones") or []
+        if zones:
             rows = []
-            for z in patrol["zones"]:
+            for z in zones:
                 rows.append({
                     "zone": z.get("id"),
                     "cells_planned": z.get("planned_cells", 0),
