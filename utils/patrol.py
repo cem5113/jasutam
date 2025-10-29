@@ -168,13 +168,12 @@ def allocate_patrols(
     duty_minutes: int,
     cell_minutes: int = 6,
     travel_overhead: float = 0.40,
-    strategy: str = "priority",
-    tier_quota: Optional[Dict[str, float]] = None,
-    distance_push_alpha: float = 0.15,
+    strategy: str = "priority",                         # "priority" | "balanced"
+    tier_quota: Optional[Dict[str, float]] = None,      # balanced için
+    distance_push_alpha: float = 0.15,                  # balanced için
     init: str = "farthest",
     random_state: Optional[int] = None,
-    jitter_scale: float = 0.0,
-    travel_time_fn=None,   # <── EKLENDİ
+    jitter_scale: float = 0.0
 ) -> Dict:
     """
     Tek devriye planı döndürür.
@@ -243,50 +242,10 @@ def allocate_patrols(
             # priority: saf risk öncelikli
             sub = sub.sort_values(["tier_rank", "expected"], ascending=[True, False])
             sub_planned = sub.head(cap_cells).copy()
-        
+
+        # Rota (açıya göre)
         angles = np.arctan2(sub_planned["centroid_lat"] - cz[1], sub_planned["centroid_lon"] - cz[0])
-        sub_ordered = sub_planned.assign(angle=angles).sort_values("angle")
-        
-        # Yol fonksiyonu varsa: görev süresini aşmadan açgözlü (greedy) doldur
-        if callable(travel_time_fn):
-            picked = []
-            eta = 0.0
-            prev_latlon = (float(cz[1]), float(cz[0]))  # (lat, lon) merkezden başla
-            for _, r in sub_ordered.iterrows():
-                nxt = (float(r["centroid_lat"]), float(r["centroid_lon"]))
-                # travel_time_fn(prev, nxt) dakikayı döndürmeli
-                try:
-                    t_move = float(travel_time_fn(prev_latlon, nxt))
-                except Exception:
-                    t_move = cell_minutes * travel_overhead  # emniyetli fallback
-                # Bu hücreyi eklersek toplam süre?
-                if eta + cell_minutes + t_move > duty_minutes:
-                    break
-                picked.append(r.name)
-                eta += (cell_minutes + t_move)
-                prev_latlon = nxt
-        
-            # hiçbirini seçemediysen en az 1 hücre zorla
-            if not picked and len(sub_ordered) > 0:
-                first = sub_ordered.iloc[[0]]
-                picked = [first.index[0]]
-                # tek hücre: sadece ziyaret süresi varsay
-                eta = float(cell_minutes)
-        
-            sub_planned = sub_ordered.loc[picked].copy()
-            route = sub_planned[["centroid_lat", "centroid_lon"]].to_numpy().tolist()
-            n_cells = len(sub_planned)
-            eta_minutes = int(round(eta))
-            util = min(100, int(round(100 * eta_minutes / max(1, duty_minutes))))
-            cap_cells = n_cells  # dinamik kapasite
-        else:
-            # eski davranış (sabit overhead)
-            route = sub_ordered[["centroid_lat", "centroid_lon"]].to_numpy().tolist()
-            n_cells = len(sub_ordered)
-            eta_minutes = int(round(n_cells * cell_minutes * (1.0 + travel_overhead)))
-            util = min(100, int(round(100 * eta_minutes / max(1, duty_minutes))))
-            cap_cells = int(max(1, int(duty_minutes / (cell_minutes * (1.0 + travel_overhead)))) )
-            sub_planned = sub_ordered.head(cap_cells).copy()
+        sub_planned = sub_planned.assign(angle=angles).sort_values("angle")
         route = sub_planned[["centroid_lat", "centroid_lon"]].to_numpy().tolist()
 
         n_cells = len(sub_planned)
@@ -391,69 +350,6 @@ def suggest_multiple_plans(
 # ---------------------------
 # Kolay sarmalayıcılar (UI'de kullanışlı)
 # ---------------------------
-
-def make_balanced_plans(
-    df_agg: pd.DataFrame,
-    geo_df: pd.DataFrame,
-    k_planned: int,
-    duty_minutes: int,
-    *,
-    cell_minutes: int = 6,
-    travel_overhead: float = 0.40,
-    tier_quota: Optional[Dict[str, float]] = None,
-    distance_push_alpha: float = 0.15,
-    init: str = "farthest",
-    random_state: Optional[int] = None,
-    jitter_scale: float = 0.0,
-    travel_time_fn=None,
-    **kwargs
-) -> Dict:
-    """Deprecated: Eski API'yi destekler; yeni kod allocate_patrols kullanmalı."""
-    return allocate_patrols(
-        df_agg=df_agg,
-        geo_df=geo_df,
-        k_planned=k_planned,
-        duty_minutes=duty_minutes,
-        cell_minutes=cell_minutes,
-        travel_overhead=travel_overhead,
-        strategy="balanced",
-        tier_quota=tier_quota,
-        distance_push_alpha=distance_push_alpha,
-        init=init,
-        random_state=random_state,
-        jitter_scale=jitter_scale,
-        travel_time_fn=travel_time_fn,
-    )
-
-def make_priority_plans(
-    df_agg: pd.DataFrame,
-    geo_df: pd.DataFrame,
-    k_planned: int,
-    duty_minutes: int,
-    *,
-    cell_minutes: int = 6,
-    travel_overhead: float = 0.40,
-    init: str = "topk",
-    random_state: Optional[int] = None,
-    jitter_scale: float = 0.0,
-    **kwargs
-) -> Dict:
-    """
-    DEPRECATED: Eski API’yi desteklemek için.
-    """
-    return allocate_patrols(
-        df_agg=df_agg,
-        geo_df=geo_df,
-        k_planned=k_planned,
-        duty_minutes=duty_minutes,
-        cell_minutes=cell_minutes,
-        travel_overhead=travel_overhead,
-        strategy="priority",
-        init=init,
-        random_state=random_state,
-        jitter_scale=jitter_scale,
-    )
-
 def suggest_dual_plans_single(
     df_agg: pd.DataFrame,
     geo_df: pd.DataFrame,
