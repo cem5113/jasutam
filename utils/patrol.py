@@ -350,6 +350,73 @@ def suggest_multiple_plans(
 # ---------------------------
 # Kolay sarmalayıcılar (UI'de kullanışlı)
 # ---------------------------
+# -----------------------------------------
+# Geriye-uyumlu sarmalayıcılar (deprecated)
+# -----------------------------------------
+def make_balanced_plans(
+    df_agg: pd.DataFrame,
+    geo_df: pd.DataFrame,
+    k_planned: int,
+    duty_minutes: int,
+    *,
+    cell_minutes: int = 6,
+    travel_overhead: float = 0.40,
+    tier_quota: Optional[Dict[str, float]] = None,
+    distance_push_alpha: float = 0.15,
+    init: str = "farthest",
+    random_state: Optional[int] = None,
+    jitter_scale: float = 0.0,
+    travel_time_fn=None,   # kabul et ama şimdilik kullanma
+    **kwargs               # gelecekteki ek argümanları da yut
+) -> Dict:
+    """
+    DEPRECATED: Eski API'yi desteklemek için.
+    travel_time_fn verilirse şu an kullanılmıyor; ileride entegrasyon yapılabilir.
+    """
+    return allocate_patrols(
+        df_agg=df_agg,
+        geo_df=geo_df,
+        k_planned=k_planned,
+        duty_minutes=duty_minutes,
+        cell_minutes=cell_minutes,
+        travel_overhead=travel_overhead,
+        strategy="balanced",
+        tier_quota=tier_quota,
+        distance_push_alpha=distance_push_alpha,
+        init=init,
+        random_state=random_state,
+        jitter_scale=jitter_scale,
+    )
+
+def make_priority_plans(
+    df_agg: pd.DataFrame,
+    geo_df: pd.DataFrame,
+    k_planned: int,
+    duty_minutes: int,
+    *,
+    cell_minutes: int = 6,
+    travel_overhead: float = 0.40,
+    init: str = "topk",
+    random_state: Optional[int] = None,
+    jitter_scale: float = 0.0,
+    **kwargs
+) -> Dict:
+    """
+    DEPRECATED: Eski API’yi desteklemek için.
+    """
+    return allocate_patrols(
+        df_agg=df_agg,
+        geo_df=geo_df,
+        k_planned=k_planned,
+        duty_minutes=duty_minutes,
+        cell_minutes=cell_minutes,
+        travel_overhead=travel_overhead,
+        strategy="priority",
+        init=init,
+        random_state=random_state,
+        jitter_scale=jitter_scale,
+    )
+
 def suggest_dual_plans_single(
     df_agg: pd.DataFrame,
     geo_df: pd.DataFrame,
